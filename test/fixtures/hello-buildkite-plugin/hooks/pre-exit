@@ -1,0 +1,4 @@
+#!/bin/bash
+set -uo pipefail
+
+echo "[pre-exit] always runs regardless of earlier failures. HELLO_POST_COMMAND_VAR=${HELLO_POST_COMMAND_VAR:-<MISSING>}"

@@ -1,0 +1,20 @@
+description: >
+  A Docker executor for running Buildkite plugins. Most Buildkite plugin hooks are
+  plain bash and need nothing more than this - it starts faster and costs less than
+  `machine`. Prefer `machine` instead when the plugin's own hooks invoke `docker`/
+  `docker-compose` directly, since this executor's container has no Docker daemon
+  of its own.
+
+parameters:
+  image:
+    type: string
+    default: cimg/base:current
+    description: The Docker image to run the plugin's hooks in. Must provide bash, git, curl and coreutils.
+  resource_class:
+    type: string
+    default: medium
+    description: The resource class for the executor.
+
+docker:
+  - image: << parameters.image >>
+resource_class: << parameters.resource_class >>

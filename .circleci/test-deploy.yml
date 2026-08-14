@@ -1,0 +1,216 @@
+version: 2.1
+orbs:
+  # Your orb will be automatically injected here during the pipeline.
+  # Reference your orb's jobs and commands below as they will exist when built.
+  orb-tools: circleci/orb-tools@12.3.0
+  # The orb definition is intentionally not included here. It will be injected into the pipeline.
+  buildkite: {}
+
+# Use this tag to ensure test jobs always run,
+# even though the downstream publish job will only run on release tags.
+filters: &filters
+  tags:
+    only: /.*/
+
+# Filter for release tags.
+release-filters: &release-filters
+  branches:
+    ignore: /.*/
+  tags:
+    only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+jobs:
+  # Exercises fetch-plugin's reference resolution (bare name, full git URL, the
+  # "-buildkite-plugin"-suffix vs. "_GIT"-suffix naming rule), configure's YAML
+  # flattening, and run-hooks' cross-process environment-diff threading - all
+  # credential-free, against the orb's own bundled fixture plugin plus one real,
+  # bare-name-referenced plugin (fetched but not run, so no Vault server is needed).
+  test_resolution_config_and_env_threading:
+    docker:
+      - image: cimg/base:current
+    working_directory: /home/circleci/project
+    steps:
+      - checkout
+      - run:
+          name: Build two throwaway git repos from the bundled test fixture
+          command: |
+            set -euo pipefail
+            git config --global user.email "test@example.com"
+            git config --global user.name "orb test"
+
+            # A repo named "*-buildkite-plugin" - the common case.
+            rm -rf /tmp/hello-buildkite-plugin
+            cp -r test/fixtures/hello-buildkite-plugin /tmp/hello-buildkite-plugin
+            git -C /tmp/hello-buildkite-plugin init -q -b main
+            git -C /tmp/hello-buildkite-plugin add -A
+            git -C /tmp/hello-buildkite-plugin commit -q -m fixture
+
+            # A repo that does NOT end in "-buildkite-plugin" - exercises the _GIT
+            # env-prefix suffix rule for plugins referenced by a full git URL.
+            rm -rf /tmp/plain-repo
+            mkdir -p /tmp/plain-repo/hooks
+            cat > /tmp/plain-repo/plugin.yml <<'YAML'
+            name: Plain
+            description: Fixture with a repo name that doesn't end in -buildkite-plugin.
+            YAML
+            printf '#!/bin/bash\nexport PLAIN_REPO_HOOK_RAN=true\n' > /tmp/plain-repo/hooks/environment
+            chmod +x /tmp/plain-repo/hooks/environment
+            git -C /tmp/plain-repo init -q -b main
+            git -C /tmp/plain-repo add -A
+            git -C /tmp/plain-repo commit -q -m fixture
+      - buildkite/fetch-plugin:
+          plugin: "file:///tmp/hello-buildkite-plugin"
+      - run:
+          name: "Assert: '*-buildkite-plugin' name derivation"
+          command: |
+            set -euo pipefail
+            test "$BUILDKITE_PLUGIN_ENV_PREFIX" = "BUILDKITE_PLUGIN_HELLO"
+            test "$BUILDKITE_PLUGIN_NAME" = "HELLO"
+            test -f "$BUILDKITE_PLUGIN_ROOT/plugin.yml"
+            echo "OK: BUILDKITE_PLUGIN_ENV_PREFIX=$BUILDKITE_PLUGIN_ENV_PREFIX"
+      - buildkite/configure:
+          config: |
+            greeting: "hello there"
+            tags:
+              - alpha
+              - beta
+            options:
+              loud: true
+      - run:
+          name: "Assert: config flattening (scalar, array, nested object)"
+          command: |
+            set -euo pipefail
+            test "$BUILDKITE_PLUGIN_HELLO_GREETING" = "hello there"
+            test "$BUILDKITE_PLUGIN_HELLO_TAGS_0" = "alpha"
+            test "$BUILDKITE_PLUGIN_HELLO_TAGS_1" = "beta"
+            test "$BUILDKITE_PLUGIN_HELLO_OPTIONS_LOUD" = "true"
+            echo "OK: config correctly flattened to BUILDKITE_PLUGIN_HELLO_* variables"
+      - buildkite/install-agent-shim
+      - buildkite/run-hooks:
+          hooks: "pre-checkout,post-checkout,environment,pre-command,command,post-command,pre-exit"
+          command: "echo running-fallback-command"
+      - run:
+          name: "Assert: environment-diff threaded across separate hook processes"
+          command: |
+            set -euo pipefail
+            test "$HELLO_ENV_VAR" = "set-by-environment-hook"
+            test "$HELLO_PRE_COMMAND_VAR" = "set-by-pre-command-hook"
+            test "$HELLO_POST_COMMAND_VAR" = "set-by-post-command-hook"
+            test -z "${HELLO_TO_BE_REMOVED:-}"
+            echo "OK: additions AND a removal both threaded forward correctly, into a native step, via \$BASH_ENV"
+      - buildkite/fetch-plugin:
+          plugin: "file:///tmp/plain-repo"
+      - run:
+          name: "Assert: _GIT suffix for a full-URL plugin whose repo isn't *-buildkite-plugin"
+          command: |
+            set -euo pipefail
+            test "$BUILDKITE_PLUGIN_ENV_PREFIX" = "BUILDKITE_PLUGIN_PLAIN_REPO_GIT"
+            echo "OK: BUILDKITE_PLUGIN_ENV_PREFIX=$BUILDKITE_PLUGIN_ENV_PREFIX"
+      - buildkite/fetch-plugin:
+          plugin: "vault-secrets#v2.4.2"
+      - run:
+          name: "Assert: bare-name reference resolves under the buildkite-plugins org"
+          command: |
+            set -euo pipefail
+            test "$BUILDKITE_PLUGIN_ENV_PREFIX" = "BUILDKITE_PLUGIN_VAULT_SECRETS"
+            test -d "$BUILDKITE_PLUGIN_ROOT/hooks"
+            echo "OK: fetched buildkite-plugins/vault-secrets-buildkite-plugin without any Vault credentials"
+      - run:
+          name: "Assert: buildkite-agent shim - hard-fails and shimmed subcommands"
+          command: |
+            set -euo pipefail
+            ! buildkite-agent annotate "hi" --style success 2>/dev/null
+            ! buildkite-agent pipeline upload foo.yml 2>/dev/null
+            ! buildkite-agent step get label 2>/dev/null
+            echo staged-artifact > /tmp/artifact-src.txt
+            (cd /tmp && buildkite-agent artifact upload artifact-src.txt)
+            test -f "$BUILDKITE_SHIM_ARTIFACT_DIR/artifact-src.txt"
+            buildkite-agent meta-data set greeting "hi from meta-data"
+            test "$(buildkite-agent meta-data get greeting)" = "hi from meta-data"
+            echo "OK: hard-fails and shimmed subcommands all behaved as documented"
+
+  # The build-in-a-hook itself: cci-labs/buildkite's fetch, config, shim and hook
+  # runner are only faithful if they also work against a *real*, unmodified,
+  # third-party Buildkite plugin fetched live from GitHub - not just this orb's own
+  # bundled fixture. equinixmetal-buildkite/trivy is credential-free (it downloads its
+  # own scanner binary and scans the filesystem), so it also serves as this orb's
+  # canonical "does the whole thing actually work" test.
+  test_real_plugin_trivy:
+    executor: buildkite/docker
+    steps:
+      - checkout
+      - buildkite/plugin:
+          plugin: "equinixmetal-buildkite/trivy#v1.22.0"
+          config: |
+            exit-code: 0
+            severity: "CRITICAL,HIGH"
+          command: "echo scanning-repository"
+      - run:
+          name: "Assert: trivy's pre-checkout-hook exports threaded all the way to a native step"
+          command: |
+            set -euo pipefail
+            test -n "$TRIVY_VERSION"
+            test -n "$TRIVY_EXE_PATH"
+            echo "OK: TRIVY_VERSION=$TRIVY_VERSION threaded from pre-checkout, across post-command, into \$BASH_ENV"
+
+workflows:
+  test-deploy:
+    jobs:
+      # Make sure to include "filters: *filters" in every test job you want to run as part of your deployment.
+      - test_resolution_config_and_env_threading:
+          name: "Testing resolution, config flattening and env-diff threading"
+          filters: *filters
+      - test_real_plugin_trivy:
+          name: "Testing a real plugin (trivy, credential-free)"
+          filters: *filters
+      - buildkite/plugin:
+          name: "Testing the plugin job: executor override + pre/post-steps"
+          plugin: "equinixmetal-buildkite/trivy#v1.22.0"
+          config: |
+            exit-code: 0
+          command: "echo scanning-repository"
+          checkout: false
+          executor:
+            name: buildkite/machine
+            image: ubuntu-2404:current
+            resource_class: medium
+          pre-steps:
+            - checkout
+          post-steps:
+            - run:
+                name: "Assert: post-steps run after the plugin's hooks, with their env visible"
+                command: |
+                  set -euo pipefail
+                  test -n "$TRIVY_VERSION"
+                  echo "OK: post-steps saw TRIVY_VERSION=$TRIVY_VERSION"
+          filters: *filters
+      # The orb must be re-packed for publishing, and saved to the workspace.
+      - orb-tools/pack:
+          filters: *filters
+          requires:
+            - "Testing resolution, config flattening and env-diff threading"
+            - "Testing a real plugin (trivy, credential-free)"
+            - "Testing the plugin job: executor override + pre/post-steps"
+      - orb-tools/publish:
+          name: "Publish Dev"
+          orb_name: cci-labs/buildkite
+          vcs_type: << pipeline.project.type >>
+          pub_type: dev
+          # Ensure this job requires all test jobs and the pack job.
+          requires:
+            - orb-tools/pack
+          context: orb-publishing
+          release_environment: orbs-dev
+          github_token: GHI_TOKEN
+      - orb-tools/publish:
+          name: "Publish Production"
+          orb_name: cci-labs/buildkite
+          vcs_type: << pipeline.project.type >>
+          pub_type: production
+          # Ensure this job requires all test jobs and the pack job.
+          requires:
+            - orb-tools/pack
+          context: orb-publishing
+          filters: *release-filters
+          release_environment: orbs-prod
+          github_token: GHI_TOKEN

@@ -1,0 +1,20 @@
+name: Hello
+description: >
+  Minimal fixture plugin used by the cci-labs/buildkite orb's own test suite to
+  exercise config flattening and cross-hook (cross-process) environment threading.
+  Not a real Buildkite plugin, not published anywhere.
+author: https://github.com/CircleCI-Labs/buildkite-orb
+configuration:
+  properties:
+    greeting:
+      type: string
+    tags:
+      type: array
+    options:
+      type: object
+      properties:
+        loud:
+          type: boolean
+  required:
+    - greeting
+  additionalProperties: false

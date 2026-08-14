@@ -1,0 +1,37 @@
+description: >
+  Write a `buildkite-agent` shim onto $PATH so plugin hooks that shell out to it don't
+  fail with "command not found". `artifact` and single-job `meta-data` are reimplemented
+  against a local directory; `env`/`pty`/`terminate` are reimplemented locally too;
+  everything that genuinely requires Buildkite's own control plane (`annotate`,
+  `pipeline`, `step`, `oidc`, `secret`, `lock`, cross-job `meta-data`) exits non-zero
+  with a message naming the subcommand and pointing at the README - see its
+  "buildkite-agent subcommands" table for the full list and rationale.
+
+parameters:
+  shim-dir:
+    type: string
+    default: /tmp/buildkite-agent-shim
+    description: Directory the shim script is written into and prepended onto $PATH.
+  artifact-dir:
+    type: string
+    default: /tmp/buildkite-artifacts
+    description: >
+      Directory `buildkite-agent artifact upload` copies matched files into. Add a
+      `store_artifacts` step (command usage) - or rely on the `plugin` job's own,
+      automatic one (job usage) - pointing at this same path to actually persist them.
+  meta-data-dir:
+    type: string
+    default: /tmp/buildkite-meta-data
+    description: >
+      Directory backing `buildkite-agent meta-data get/set`, scoped to this job only -
+      see the README, this does not span multiple CircleCI jobs the way Buildkite's
+      build-wide meta-data store does.
+
+steps:
+  - run:
+      name: Installing buildkite-agent shim
+      environment:
+        ORB_VAL_SHIM_DIR: << parameters.shim-dir >>
+        ORB_VAL_ARTIFACT_DIR: << parameters.artifact-dir >>
+        ORB_VAL_META_DATA_DIR: << parameters.meta-data-dir >>
+      command: <<include(scripts/install-agent-shim.sh)>>

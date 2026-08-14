@@ -1,0 +1,19 @@
+#!/bin/bash
+set -uo pipefail
+
+echo "[post-command] pwd=$(pwd)"
+echo "[post-command] HELLO_ENV_VAR=${HELLO_ENV_VAR:-<MISSING>}"
+echo "[post-command] HELLO_PRE_COMMAND_VAR=${HELLO_PRE_COMMAND_VAR:-<MISSING>}"
+echo "[post-command] HELLO_TO_BE_REMOVED=${HELLO_TO_BE_REMOVED:-<correctly unset>}"
+
+fail=false
+[[ "$(pwd)" == "/tmp/hello-plugin-workdir" ]] || { echo "[post-command] FAIL: working directory did not thread forward from pre-command" >&2; fail=true; }
+[[ -n "${HELLO_ENV_VAR:-}" ]] || { echo "[post-command] FAIL: HELLO_ENV_VAR missing (environment hook's export was lost)" >&2; fail=true; }
+[[ -n "${HELLO_PRE_COMMAND_VAR:-}" ]] || { echo "[post-command] FAIL: HELLO_PRE_COMMAND_VAR missing (pre-command hook's export was lost)" >&2; fail=true; }
+[[ -z "${HELLO_TO_BE_REMOVED:-}" ]] || { echo "[post-command] FAIL: HELLO_TO_BE_REMOVED should have been unset by pre-command" >&2; fail=true; }
+
+export HELLO_POST_COMMAND_VAR="set-by-post-command-hook"
+
+if [[ "${fail}" == "true" ]]; then
+  exit 1
+fi

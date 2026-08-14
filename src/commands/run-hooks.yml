@@ -1,0 +1,40 @@
+description: >
+  Run the plugin's hooks, in Buildkite's documented lifecycle order, each as its own
+  process - and thread each hook's environment-variable changes (additions, changes and
+  removals) forward to the next hook, exactly the way buildkite-agent's own
+  scriptwrapper does: dump the environment before the hook, dot-source the hook file
+  inside a disposable wrapper script, dump the environment after, diff the two, and
+  apply the diff (not the hook's shell state) forward. The final accumulated diff is
+  exported into $BASH_ENV so native CircleCI steps after this one see it too. Requires
+  fetch-plugin (and usually configure) to have already run.
+
+parameters:
+  hooks:
+    type: string
+    default: "pre-checkout,post-checkout,environment,pre-command,command,post-command,pre-exit"
+    description: >
+      Comma-separated hook names to run, in Buildkite's fixed order (only the ones
+      listed here run; missing hook files are silently skipped). `checkout` and
+      `pre-artifact`/`post-artifact` are deliberately excluded by default - see the
+      README's "hooks and CircleCI-native equivalents" section for why, and add them
+      here explicitly if you need them.
+  command:
+    type: string
+    default: ""
+    description: >
+      Shell command to run as the "command" phase when the plugin defines no
+      hooks/command file of its own - mirrors a Buildkite step's own `command:`
+      attribute, which only runs when no plugin supplies a command hook.
+  working-directory:
+    type: string
+    default: "."
+    description: Directory hooks start running from - Buildkite's BUILDKITE_BUILD_CHECKOUT_PATH equivalent.
+
+steps:
+  - run:
+      name: Running Buildkite plugin hooks
+      environment:
+        ORB_VAL_HOOKS: << parameters.hooks >>
+        ORB_VAL_COMMAND: << parameters.command >>
+        ORB_VAL_WORKING_DIRECTORY: << parameters.working-directory >>
+      command: <<include(scripts/run-hooks.sh)>>

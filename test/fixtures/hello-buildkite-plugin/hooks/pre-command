@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "[pre-command] HELLO_ENV_VAR=${HELLO_ENV_VAR:-<MISSING>}"
+
+if [[ -z "${HELLO_ENV_VAR:-}" ]]; then
+  echo "[pre-command] FAIL: the environment hook's export did not thread forward" >&2
+  exit 1
+fi
+
+unset HELLO_TO_BE_REMOVED
+export HELLO_PRE_COMMAND_VAR="set-by-pre-command-hook"
+
+mkdir -p /tmp/hello-plugin-workdir
+cd /tmp/hello-plugin-workdir

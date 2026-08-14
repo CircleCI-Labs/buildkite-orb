@@ -1,0 +1,23 @@
+description: |
+  Override the default `docker` executor with `machine` for a plugin whose own hooks
+  shell out to `docker`/`docker-compose` themselves (the docker executor's container
+  has no Docker daemon of its own to hand them). Also shows always-clone-fresh: true,
+  useful while developing a plugin of your own against a mutable branch ref rather than
+  a pinned tag.
+
+usage:
+  version: 2.1
+  orbs:
+    buildkite: cci-labs/buildkite@x.y.z
+  workflows:
+    main:
+      jobs:
+        - buildkite/plugin:
+            name: "Run a Docker-shelling-out plugin on the machine executor"
+            plugin: "my-org/my-internal-tool#dev"
+            always-clone-fresh: true
+            executor:
+              name: buildkite/machine
+              image: ubuntu-2404:current
+              resource_class: large
+            command: "make build"

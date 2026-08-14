@@ -1,0 +1,125 @@
+description: >
+  Run ONE Buildkite plugin as a standalone job, callable from a workflow. Wraps the
+  `plugin` command with an executor choice, an optional native checkout, and
+  pre-steps/post-steps so you can interleave your own native CircleCI steps around the
+  plugin's hooks without dropping down to the individual commands yourself. Also wires
+  up a store_artifacts step for whatever the plugin's hooks staged via
+  `buildkite-agent artifact upload` (see install-agent-shim).
+
+parameters:
+  plugin:
+    type: string
+    description: The Buildkite plugin reference - see the fetch-plugin command.
+  config:
+    type: string
+    default: ""
+    description: The plugin's configuration, as YAML - see the configure command.
+  command:
+    type: string
+    default: ""
+    description: Shell command to run when the plugin defines no hooks/command file of its own.
+  hooks:
+    type: string
+    default: "pre-checkout,post-checkout,environment,pre-command,command,post-command,pre-exit"
+    description: Comma-separated hook names to run, in Buildkite's fixed order - see the run-hooks command.
+  executor:
+    type: executor
+    default: docker
+    description: >
+      The executor to run the plugin's hooks on. `docker` (the default) suits plain-bash
+      hooks; switch to `machine` when the plugin's own hooks shell out to docker/
+      docker-compose themselves.
+  checkout:
+    type: boolean
+    default: true
+    description: Run CircleCI's native checkout step before the plugin's hooks.
+  pre-steps:
+    type: steps
+    default: []
+    description: Steps to run after checkout (if enabled) but before the plugin's hooks.
+  post-steps:
+    type: steps
+    default: []
+    description: Steps to run after the plugin's hooks (and artifact store, if any) complete.
+  map-env:
+    type: boolean
+    default: true
+    description: See the map-env command.
+  extra-env:
+    type: string
+    default: ""
+    description: See the map-env command.
+  install-shim:
+    type: boolean
+    default: true
+    description: See the install-agent-shim command.
+  shim-dir:
+    type: string
+    default: /tmp/buildkite-agent-shim
+    description: See the install-agent-shim command.
+  artifact-dir:
+    type: string
+    default: /tmp/buildkite-artifacts
+    description: See the install-agent-shim command.
+  meta-data-dir:
+    type: string
+    default: /tmp/buildkite-meta-data
+    description: See the install-agent-shim command.
+  store-artifacts:
+    type: boolean
+    default: true
+    description: Automatically store_artifacts anything the plugin's hooks uploaded via `buildkite-agent artifact upload`.
+  plugin-dir:
+    type: string
+    default: /tmp/buildkite-plugin
+    description: See the fetch-plugin command.
+  plugin-cache:
+    type: boolean
+    default: true
+    description: See the fetch-plugin command.
+  always-clone-fresh:
+    type: boolean
+    default: false
+    description: See the fetch-plugin command.
+  working-directory:
+    type: string
+    default: "."
+    description: See the run-hooks command.
+  cache-key-prefix:
+    type: string
+    default: v1
+    description: Prefixes a string to all cache keys.
+
+executor: << parameters.executor >>
+
+steps:
+  - when:
+      condition: << parameters.checkout >>
+      steps:
+        - checkout
+  - steps: << parameters.pre-steps >>
+  - plugin:
+      plugin: << parameters.plugin >>
+      config: << parameters.config >>
+      command: << parameters.command >>
+      hooks: << parameters.hooks >>
+      map-env: << parameters.map-env >>
+      extra-env: << parameters.extra-env >>
+      install-shim: << parameters.install-shim >>
+      shim-dir: << parameters.shim-dir >>
+      artifact-dir: << parameters.artifact-dir >>
+      meta-data-dir: << parameters.meta-data-dir >>
+      plugin-dir: << parameters.plugin-dir >>
+      plugin-cache: << parameters.plugin-cache >>
+      always-clone-fresh: << parameters.always-clone-fresh >>
+      working-directory: << parameters.working-directory >>
+      cache-key-prefix: << parameters.cache-key-prefix >>
+  - when:
+      condition:
+        and:
+          - << parameters.store-artifacts >>
+          - << parameters.install-shim >>
+      steps:
+        - store_artifacts:
+            path: << parameters.artifact-dir >>
+  - steps: << parameters.post-steps >>

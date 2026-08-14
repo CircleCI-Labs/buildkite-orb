@@ -1,0 +1,97 @@
+description: >
+  Run ONE Buildkite plugin as a single step among your other, native CircleCI steps.
+  This is the aggregate of fetch-plugin -> map-env -> configure -> install-agent-shim
+  -> run-hooks - reach for the individual commands instead if you need to interleave
+  native steps between them (e.g. your own checkout logic between fetching the plugin
+  and running its hooks).
+
+parameters:
+  plugin:
+    type: string
+    description: >
+      The Buildkite plugin reference, e.g. "vault-secrets#v2.4.2",
+      "equinixmetal-buildkite/trivy#v1.22.0", or a full git URL. See fetch-plugin.
+  config:
+    type: string
+    default: ""
+    description: The plugin's configuration, as YAML - see configure.
+  command:
+    type: string
+    default: ""
+    description: >
+      Shell command to run when the plugin defines no hooks/command file of its own -
+      see run-hooks.
+  hooks:
+    type: string
+    default: "pre-checkout,post-checkout,environment,pre-command,command,post-command,pre-exit"
+    description: Comma-separated hook names to run, in Buildkite's fixed order - see run-hooks.
+  map-env:
+    type: boolean
+    default: true
+    description: Map CIRCLE_* environment variables onto their BUILDKITE_* equivalents before running hooks - see map-env.
+  extra-env:
+    type: string
+    default: ""
+    description: Additional "KEY=VALUE" pairs, one per line, applied on top of the base map-env mapping.
+  install-shim:
+    type: boolean
+    default: true
+    description: Install the buildkite-agent shim onto $PATH before running hooks - see install-agent-shim.
+  shim-dir:
+    type: string
+    default: /tmp/buildkite-agent-shim
+    description: See install-agent-shim.
+  artifact-dir:
+    type: string
+    default: /tmp/buildkite-artifacts
+    description: See install-agent-shim.
+  meta-data-dir:
+    type: string
+    default: /tmp/buildkite-meta-data
+    description: See install-agent-shim.
+  plugin-dir:
+    type: string
+    default: /tmp/buildkite-plugin
+    description: See fetch-plugin.
+  plugin-cache:
+    type: boolean
+    default: true
+    description: See fetch-plugin.
+  always-clone-fresh:
+    type: boolean
+    default: false
+    description: See fetch-plugin.
+  working-directory:
+    type: string
+    default: "."
+    description: See run-hooks.
+  cache-key-prefix:
+    type: string
+    default: v1
+    description: Prefixes a string to all cache keys.
+
+steps:
+  - fetch-plugin:
+      plugin: << parameters.plugin >>
+      plugin-dir: << parameters.plugin-dir >>
+      plugin-cache: << parameters.plugin-cache >>
+      always-clone-fresh: << parameters.always-clone-fresh >>
+      cache-key-prefix: << parameters.cache-key-prefix >>
+  - when:
+      condition: << parameters.map-env >>
+      steps:
+        - map-env:
+            extra-env: << parameters.extra-env >>
+  - when:
+      condition: << parameters.install-shim >>
+      steps:
+        - install-agent-shim:
+            shim-dir: << parameters.shim-dir >>
+            artifact-dir: << parameters.artifact-dir >>
+            meta-data-dir: << parameters.meta-data-dir >>
+  - configure:
+      config: << parameters.config >>
+  - run-hooks:
+      hooks: << parameters.hooks >>
+      command: << parameters.command >>
+      working-directory: << parameters.working-directory >>

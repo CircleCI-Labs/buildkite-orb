@@ -1,0 +1,23 @@
+description: >
+  Export the CIRCLE_* -> BUILDKITE_* environment variable mapping into $BASH_ENV, so
+  hooks that read Buildkite's own job-context variables (BUILDKITE_BRANCH,
+  BUILDKITE_COMMIT, BUILDKITE_BUILD_NUMBER, ...) see a faithful CircleCI-native
+  equivalent. Variables with no CircleCI equivalent (BUILDKITE_AGENT_ACCESS_TOKEN,
+  BUILDKITE_AGENT_ENDPOINT - both require a real Buildkite account) are deliberately
+  left unset rather than faked. See the README's mapping table for the full list.
+
+parameters:
+  extra-env:
+    type: string
+    default: ""
+    description: >
+      Additional "KEY=VALUE" pairs, one per line, exported after the base mapping so
+      they can add to or override any entry (e.g. "BUILDKITE_MESSAGE=$(git log -1
+      --format=%s)"). Passed through `circleci env subst` first if available.
+
+steps:
+  - run:
+      name: Mapping CIRCLE_* environment to BUILDKITE_*
+      environment:
+        ORB_VAL_EXTRA_ENV: << parameters.extra-env >>
+      command: <<include(scripts/map-env.sh)>>

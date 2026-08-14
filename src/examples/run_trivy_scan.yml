@@ -1,0 +1,22 @@
+description: |
+  Run the credential-free equinixmetal-buildkite/trivy Buildkite plugin as a standalone
+  job. Trivy downloads its own scanner binary in a pre-checkout hook and scans the
+  checked-out repository in a post-command hook - no Buildkite account, secrets, or
+  extra setup required, which is why this same job also doubles as this orb's own CI
+  test. exit-code: 0 keeps the example deterministic; set it to 1 to fail the build on
+  findings, as the plugin's own README documents.
+
+usage:
+  version: 2.1
+  orbs:
+    buildkite: cci-labs/buildkite@x.y.z
+  workflows:
+    main:
+      jobs:
+        - buildkite/plugin:
+            name: "Trivy filesystem scan"
+            plugin: "equinixmetal-buildkite/trivy#v1.22.0"
+            config: |
+              exit-code: 0
+              severity: "CRITICAL,HIGH"
+            command: "echo 'scanning repository'"

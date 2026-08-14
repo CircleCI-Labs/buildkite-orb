@@ -1,0 +1,7 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "[environment] BUILDKITE_PLUGIN_HELLO_GREETING=${BUILDKITE_PLUGIN_HELLO_GREETING:-<unset>}"
+
+export HELLO_ENV_VAR="set-by-environment-hook"
+export HELLO_TO_BE_REMOVED="will-be-unset-by-pre-command"

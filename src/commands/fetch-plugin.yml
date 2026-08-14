@@ -1,0 +1,67 @@
+description: >
+  Resolve a Buildkite plugin reference and git clone it at the pinned ref, cached.
+  Accepts the same reference forms Buildkite itself accepts: a bare name (resolved
+  against the `buildkite-plugins` GitHub org), an `org/name` shorthand, or a full
+  `https://`/`ssh://`/`file://` git URL - each optionally followed by `#ref` and, for
+  full URLs, an optional in-repo subdirectory. Exports BUILDKITE_PLUGIN_ROOT (the
+  directory containing the plugin's plugin.yml and hooks/) and BUILDKITE_PLUGIN_NAME /
+  BUILDKITE_PLUGIN_ENV_PREFIX (derived exactly the way the real buildkite-agent derives
+  them) into $BASH_ENV for the `configure` and `run-hooks` commands to use.
+
+parameters:
+  plugin:
+    type: string
+    description: >
+      The Buildkite plugin reference, e.g. "vault-secrets#v2.4.2",
+      "equinixmetal-buildkite/trivy#v1.22.0", or
+      "https://github.com/my-org/my-plugins.git/my-plugin#v1.0.0". Pinning a ref
+      (#tag or #sha) is strongly recommended, matching Buildkite's own guidance.
+  plugin-dir:
+    type: string
+    default: /tmp/buildkite-plugin
+    description: Directory the plugin's repository is cloned into.
+  plugin-cache:
+    type: boolean
+    default: true
+    description: Cache the cloned plugin repository using CircleCI caching, keyed on the plugin reference string.
+  always-clone-fresh:
+    type: boolean
+    default: false
+    description: >
+      Force a fresh clone even if a cached or already-cloned copy is present, mirroring
+      Buildkite's own BUILDKITE_PLUGINS_ALWAYS_CLONE_FRESH. Useful while iterating on a
+      plugin against a mutable ref such as a branch.
+  cache-key-prefix:
+    type: string
+    default: v1
+    description: Prefixes a string to all cache keys.
+
+steps:
+  - when:
+      condition: << parameters.plugin-cache >>
+      steps:
+        - run:
+            name: Recording plugin reference for cache key
+            environment:
+              ORB_VAL_PLUGIN: << parameters.plugin >>
+            command: |
+              echo "$ORB_VAL_PLUGIN" > /tmp/.buildkite-plugin-ref
+        - restore_cache:
+            name: Restoring cache for Buildkite plugin clone...
+            keys:
+              - << parameters.cache-key-prefix >>-buildkite-plugin-{{ arch }}-{{ checksum "/tmp/.buildkite-plugin-ref" }}
+  - run:
+      name: Resolving and fetching Buildkite plugin
+      environment:
+        ORB_VAL_PLUGIN: << parameters.plugin >>
+        ORB_VAL_PLUGIN_DIR: << parameters.plugin-dir >>
+        ORB_VAL_ALWAYS_CLONE_FRESH: << parameters.always-clone-fresh >>
+      command: <<include(scripts/fetch-plugin.sh)>>
+  - when:
+      condition: << parameters.plugin-cache >>
+      steps:
+        - save_cache:
+            name: Saving cache for Buildkite plugin clone...
+            key: << parameters.cache-key-prefix >>-buildkite-plugin-{{ arch }}-{{ checksum "/tmp/.buildkite-plugin-ref" }}
+            paths:
+              - << parameters.plugin-dir >>

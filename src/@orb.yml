@@ -1,0 +1,13 @@
+version: 2.1
+
+description: |
+  Run a single Buildkite plugin's lifecycle hooks natively inside a CircleCI job.
+  Resolves a Buildkite plugin reference (org/name#ref or a full git URL), clones it,
+  flattens your config into BUILDKITE_PLUGIN_* environment variables using Buildkite's
+  own convention, and runs the plugin's hook scripts in Buildkite's documented order -
+  threading each hook's environment-variable changes forward to the next hook and out
+  into $BASH_ENV for your native CircleCI steps to read.
+
+display:
+  home_url: "https://buildkite.com/docs/pipelines/integrations/plugins"
+  source_url: "https://github.com/CircleCI-Labs/buildkite-orb"

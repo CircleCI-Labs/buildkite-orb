@@ -1,0 +1,24 @@
+description: >
+  A machine executor for running Buildkite plugins. Choose this executor over `docker`
+  when the plugin's own hooks need a full VM - most commonly because the plugin shells
+  out to `docker`/`docker-compose` itself, needs a loopback Docker daemon, or needs
+  kernel-level access the docker executor's container can't provide.
+
+parameters:
+  image:
+    type: string
+    default: ubuntu-2404:current
+    description: The machine image to run the plugin's hooks on.
+  resource_class:
+    type: string
+    default: medium
+    description: The resource class for the executor.
+  docker_layer_caching:
+    type: boolean
+    default: false
+    description: Enable Docker layer caching, useful if the plugin's hooks build or run Docker images.
+
+machine:
+  image: << parameters.image >>
+  docker_layer_caching: << parameters.docker_layer_caching >>
+resource_class: << parameters.resource_class >>

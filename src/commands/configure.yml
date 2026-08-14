@@ -1,0 +1,27 @@
+description: >
+  Flatten the `config` YAML string into BUILDKITE_PLUGIN_<NAME>_<KEY> environment
+  variables, using the exact flattening algorithm buildkite-agent uses (scalars assign
+  directly, arrays get _0/_1/... suffixes, nested objects get _SUBKEY suffixes - see
+  agent/plugin/plugin.go's flattenConfigToEnvMap). Run `fetch-plugin` first so
+  BUILDKITE_PLUGIN_ENV_PREFIX is set. The config string is passed through
+  `circleci env subst` first, so you can write $MY_SECRET inside it without the
+  secret's value ever appearing in your CircleCI config.
+
+parameters:
+  config:
+    type: string
+    default: ""
+    description: >
+      The plugin's configuration as a YAML mapping, exactly as you'd write it under a
+      plugin's key in a Buildkite pipeline.yml (minus the plugin key itself), e.g.:
+        role-arn: arn:aws:iam::123456789012:role/my-role
+        session-tags:
+          - organization_slug
+          - pipeline_slug
+
+steps:
+  - run:
+      name: Flattening plugin config to BUILDKITE_PLUGIN_* environment variables
+      environment:
+        ORB_VAL_CONFIG: << parameters.config >>
+      command: <<include(scripts/configure.sh)>>
