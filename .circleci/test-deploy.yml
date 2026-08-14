@@ -49,7 +49,7 @@ jobs:
             # env-prefix suffix rule for plugins referenced by a full git URL.
             rm -rf /tmp/plain-repo
             mkdir -p /tmp/plain-repo/hooks
-            cat > /tmp/plain-repo/plugin.yml <<'YAML'
+            cat > /tmp/plain-repo/plugin.yml \<<'YAML'
             name: Plain
             description: Fixture with a repo name that doesn't end in -buildkite-plugin.
             YAML
@@ -164,7 +164,7 @@ workflows:
           name: "Testing a real plugin (trivy, credential-free)"
           filters: *filters
       - buildkite/plugin:
-          name: "Testing the plugin job: executor override + pre/post-steps"
+          name: "Testing the plugin job: executor override + before/after-steps"
           plugin: "equinixmetal-buildkite/trivy#v1.22.0"
           config: |
             exit-code: 0
@@ -174,15 +174,15 @@ workflows:
             name: buildkite/machine
             image: ubuntu-2404:current
             resource_class: medium
-          pre-steps:
+          before-steps:
             - checkout
-          post-steps:
+          after-steps:
             - run:
-                name: "Assert: post-steps run after the plugin's hooks, with their env visible"
+                name: "Assert: after-steps run after the plugin's hooks, with their env visible"
                 command: |
                   set -euo pipefail
                   test -n "$TRIVY_VERSION"
-                  echo "OK: post-steps saw TRIVY_VERSION=$TRIVY_VERSION"
+                  echo "OK: after-steps saw TRIVY_VERSION=$TRIVY_VERSION"
           filters: *filters
       # The orb must be re-packed for publishing, and saved to the workspace.
       - orb-tools/pack:
@@ -190,7 +190,7 @@ workflows:
           requires:
             - "Testing resolution, config flattening and env-diff threading"
             - "Testing a real plugin (trivy, credential-free)"
-            - "Testing the plugin job: executor override + pre/post-steps"
+            - "Testing the plugin job: executor override + before/after-steps"
       - orb-tools/publish:
           name: "Publish Dev"
           orb_name: cci-labs/buildkite

@@ -82,7 +82,7 @@ executor overrides.
    `$BASH_ENV`, so native CircleCI steps after this one see it too.
 6. **`plugin`** is the aggregate of all four - the one most users call directly, as
    either a command (inline among native steps) or a job (`buildkite/plugin`, callable
-   from a workflow, with `pre-steps`/`post-steps` for interleaving and an automatic
+   from a workflow, with `before-steps`/`after-steps` for interleaving and an automatic
    `store_artifacts` for whatever the hooks staged via `buildkite-agent artifact upload`).
 
 ## `CIRCLE_*` → `BUILDKITE_*` environment mapping
@@ -279,9 +279,13 @@ not invented - see [`src/examples/`](src/examples/).
   under `configuration`; real Buildkite validates config against it, but only when this
   flag is explicitly enabled (default `false` even on real Buildkite). This orb doesn't
   implement that validation at all, in v1.
-- **Embedded-newline values** - `run-hooks`' environment-diffing is line-based; a value
-  containing a literal newline may not thread forward correctly between hooks. None of
-  this orb's three verified targets produce one.
+- **Very old bash images** - `run-hooks`' environment-diffing relies on `export -p`
+  rendering a value with embedded newlines or quotes as a single `$'...'`-quoted
+  (ANSI-C) line, which every bash 4.x/5.x tested against (including `cimg/base`'s
+  bash 5.2) does - verified end-to-end with both a newline-bearing and a
+  quote-bearing value threading correctly through `$BASH_ENV` into a later step. An
+  image old enough to predate that quoting behavior could misbehave; none of this
+  orb's three verified targets are affected either way.
 - **Multi-line YAML scalars, flow-style config, anchors/aliases, same-line trailing
   `#` comments** - see [Config flattening](#config-flattening).
 - **The `docker`/`docker-compose` plugins** - deliberately not a target; see above.

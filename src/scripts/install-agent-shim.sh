@@ -10,7 +10,7 @@ mkdir -p "${SHIM_DIR}" "${ARTIFACT_DIR}" "${META_DATA_DIR}"
 # The shim is written as its own standalone script (not sourced from this one) because
 # it needs to run as `buildkite-agent <subcommand>` from arbitrary hook processes later
 # in the job, long after this install step has finished.
-cat > "${SHIM_DIR}/buildkite-agent" <<'SHIM_EOF'
+cat > "${SHIM_DIR}/buildkite-agent" << 'SHIM_EOF'
 #!/bin/bash
 # buildkite-agent shim, installed by the cci-labs/buildkite orb's install-agent-shim
 # command. This is NOT the real buildkite-agent binary - it is a small reimplementation
@@ -219,9 +219,9 @@ SHIM_EOF
 chmod +x "${SHIM_DIR}/buildkite-agent"
 
 {
-  echo "export PATH=\"${SHIM_DIR}:\${PATH}\""
-  echo "export BUILDKITE_SHIM_ARTIFACT_DIR='${ARTIFACT_DIR}'"
-  echo "export BUILDKITE_SHIM_META_DATA_DIR='${META_DATA_DIR}'"
+    echo "export PATH=\"${SHIM_DIR}:\${PATH}\""
+    echo "export BUILDKITE_SHIM_ARTIFACT_DIR='${ARTIFACT_DIR}'"
+    echo "export BUILDKITE_SHIM_META_DATA_DIR='${META_DATA_DIR}'"
 } >> "${BASH_ENV}"
 
 export PATH="${SHIM_DIR}:${PATH}"

@@ -1,7 +1,7 @@
 description: >
   Run ONE Buildkite plugin as a standalone job, callable from a workflow. Wraps the
   `plugin` command with an executor choice, an optional native checkout, and
-  pre-steps/post-steps so you can interleave your own native CircleCI steps around the
+  before-steps/after-steps so you can interleave your own native CircleCI steps around the
   plugin's hooks without dropping down to the individual commands yourself. Also wires
   up a store_artifacts step for whatever the plugin's hooks staged via
   `buildkite-agent artifact upload` (see install-agent-shim).
@@ -33,11 +33,11 @@ parameters:
     type: boolean
     default: true
     description: Run CircleCI's native checkout step before the plugin's hooks.
-  pre-steps:
+  before-steps:
     type: steps
     default: []
     description: Steps to run after checkout (if enabled) but before the plugin's hooks.
-  post-steps:
+  after-steps:
     type: steps
     default: []
     description: Steps to run after the plugin's hooks (and artifact store, if any) complete.
@@ -97,7 +97,7 @@ steps:
       condition: << parameters.checkout >>
       steps:
         - checkout
-  - steps: << parameters.pre-steps >>
+  - steps: << parameters.before-steps >>
   - plugin:
       plugin: << parameters.plugin >>
       config: << parameters.config >>
@@ -122,4 +122,4 @@ steps:
       steps:
         - store_artifacts:
             path: << parameters.artifact-dir >>
-  - steps: << parameters.post-steps >>
+  - steps: << parameters.after-steps >>

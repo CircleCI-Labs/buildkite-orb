@@ -1,13 +1,13 @@
 description: |
-  Run the aws-assume-role-with-web-identity Buildkite plugin as a job, using pre-steps
-  and post-steps to interleave native CircleCI steps around its hooks. The plugin's
+  Run the aws-assume-role-with-web-identity Buildkite plugin as a job, using before-steps
+  and after-steps to interleave native CircleCI steps around its hooks. The plugin's
   environment hook calls `buildkite-agent oidc request-token`, which this orb's shim
   deliberately fails on - Buildkite issues that token from agent.buildkite.com, and
   there is no equivalent for a Buildkite account that doesn't exist. Point the plugin
-  at your own OIDC exchange instead: swap in a pre-steps command that assumes the role
+  at your own OIDC exchange instead: swap in a before-steps command that assumes the role
   using CircleCI's own OIDC token (circleci.com/docs/openid-connect-tokens) against a
   trust policy scoped to CircleCI's issuer, and skip the plugin's own hooks for the
-  parts OIDC covers. Shown here for the config-flattening and pre-steps/post-steps
+  parts OIDC covers. Shown here for the config-flattening and before-steps/after-steps
   shape; it will not assume a role credential-free.
 
 usage:
@@ -27,14 +27,14 @@ usage:
                 - pipeline_slug
             hooks: "pre-command,command,pre-exit"
             command: "aws sts get-caller-identity"
-            pre-steps:
+            before-steps:
               - run:
                   name: Confirm this project has a CircleCI OIDC token available
                   command: |
                     # Requires OIDC enabled on the project (Project Settings -> OIDC
                     # Token Management); CircleCI then populates $CIRCLE_OIDC_TOKEN.
                     test -n "$CIRCLE_OIDC_TOKEN"
-            post-steps:
+            after-steps:
               - run:
                   name: Deploy with the assumed role's credentials
                   command: ./deploy.sh

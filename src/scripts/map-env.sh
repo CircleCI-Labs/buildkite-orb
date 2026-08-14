@@ -8,31 +8,31 @@ set -uo pipefail
 # CircleCI equivalent and are deliberately left unset - see the README.
 
 export_var() {
-  # export_var NAME VALUE - writes a shell-safe `export NAME=VALUE` line to
-  # $BASH_ENV and applies it to this process too.
-  local name="$1" value="$2" quoted
-  printf -v quoted '%q' "${value}"
-  echo "export ${name}=${quoted}" >> "${BASH_ENV}"
-  export "${name}=${value}"
+    # export_var NAME VALUE - writes a shell-safe `export NAME=VALUE` line to
+    # $BASH_ENV and applies it to this process too.
+    local name="$1" value="$2" quoted
+    printf -v quoted '%q' "${value}"
+    echo "export ${name}=${quoted}" >> "${BASH_ENV}"
+    export "${name}=${value}"
 }
 
 pr_number() {
-  # CIRCLE_PULL_REQUEST is a full URL, e.g. https://github.com/org/repo/pull/123.
-  # BUILDKITE_PULL_REQUEST is just the number, or the string "false" if not a PR.
-  if [[ -n "${CIRCLE_PULL_REQUEST:-}" ]]; then
-    echo "${CIRCLE_PULL_REQUEST##*/}"
-  else
-    echo "false"
-  fi
+    # CIRCLE_PULL_REQUEST is a full URL, e.g. https://github.com/org/repo/pull/123.
+    # BUILDKITE_PULL_REQUEST is just the number, or the string "false" if not a PR.
+    if [[ -n "${CIRCLE_PULL_REQUEST:-}" ]]; then
+        echo "${CIRCLE_PULL_REQUEST##*/}"
+    else
+        echo "false"
+    fi
 }
 
 pipeline_provider() {
-  case "${CIRCLE_REPOSITORY_URL:-}" in
-    *github.com*) echo "github" ;;
-    *bitbucket.org*) echo "bitbucket" ;;
-    *gitlab.com*) echo "gitlab" ;;
-    *) echo "unknown" ;;
-  esac
+    case "${CIRCLE_REPOSITORY_URL:-}" in
+        *github.com*) echo "github" ;;
+        *bitbucket.org*) echo "bitbucket" ;;
+        *gitlab.com*) echo "gitlab" ;;
+        *) echo "unknown" ;;
+    esac
 }
 
 export_var BUILDKITE "true"
@@ -52,19 +52,19 @@ export_var BUILDKITE_REPO "${CIRCLE_REPOSITORY_URL:-}"
 export_var BUILDKITE_BUILD_URL "${CIRCLE_BUILD_URL:-}"
 
 if [[ -n "${ORB_VAL_EXTRA_ENV}" ]]; then
-  RAW_EXTRA_ENV="${ORB_VAL_EXTRA_ENV}"
-  if command -v circleci >/dev/null 2>&1; then
-    RAW_EXTRA_ENV="$(circleci env subst <<< "${ORB_VAL_EXTRA_ENV}")"
-  else
-    echo "map-env: 'circleci' CLI not found on PATH - applying extra-env without \$VAR substitution." >&2
-  fi
-  while IFS= read -r line; do
-    [[ -z "${line}" ]] && continue
-    [[ "${line}" != *"="* ]] && continue
-    key="${line%%=*}"
-    value="${line#*=}"
-    export_var "${key}" "${value}"
-  done <<< "${RAW_EXTRA_ENV}"
+    RAW_EXTRA_ENV="${ORB_VAL_EXTRA_ENV}"
+    if command -v circleci > /dev/null 2>&1; then
+        RAW_EXTRA_ENV="$(circleci env subst <<< "${ORB_VAL_EXTRA_ENV}")"
+    else
+        echo "map-env: 'circleci' CLI not found on PATH - applying extra-env without \$VAR substitution." >&2
+    fi
+    while IFS= read -r line; do
+        [[ -z "${line}" ]] && continue
+        [[ "${line}" != *"="* ]] && continue
+        key="${line%%=*}"
+        value="${line#*=}"
+        export_var "${key}" "${value}"
+    done <<< "${RAW_EXTRA_ENV}"
 fi
 
 echo "Mapped CircleCI job context onto BUILDKITE_* environment variables."
