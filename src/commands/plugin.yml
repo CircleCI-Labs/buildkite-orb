@@ -23,7 +23,7 @@ parameters:
       see run-hooks.
   hooks:
     type: string
-    default: "pre-checkout,post-checkout,environment,pre-command,command,post-command,pre-exit"
+    default: "environment,pre-checkout,post-checkout,pre-command,command,post-command,pre-exit"
     description: Comma-separated hook names to run, in Buildkite's fixed order - see run-hooks.
   map-env:
     type: boolean

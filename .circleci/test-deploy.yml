@@ -2,7 +2,7 @@ version: 2.1
 orbs:
   # Your orb will be automatically injected here during the pipeline.
   # Reference your orb's jobs and commands below as they will exist when built.
-  orb-tools: circleci/orb-tools@12.3.0
+  orb-tools: circleci/orb-tools@12.5.0
   # The orb definition is intentionally not included here. It will be injected into the pipeline.
   buildkite: {}
 
@@ -87,7 +87,7 @@ jobs:
             echo "OK: config correctly flattened to BUILDKITE_PLUGIN_HELLO_* variables"
       - buildkite/install-agent-shim
       - buildkite/run-hooks:
-          hooks: "pre-checkout,post-checkout,environment,pre-command,command,post-command,pre-exit"
+          hooks: "environment,pre-checkout,post-checkout,pre-command,command,post-command,pre-exit"
           command: "echo running-fallback-command"
       - run:
           name: "Assert: environment-diff threaded across separate hook processes"

@@ -57,13 +57,17 @@ executor overrides.
 1. **`fetch-plugin`** resolves your plugin reference the same way Buildkite does -
    `name#ref` (the `buildkite-plugins` GitHub org), `org/name#ref`, or a full
    `https://`/`ssh://`/`file://` git URL, optionally with an in-repo subdirectory - and
-   git-clones it at the pinned ref, cached.
+   git-clones it at the pinned ref, cached. It also warns (non-fatally) if the cloned
+   plugin.yml's `requirements:` list names a command missing from `$PATH` - real
+   Buildkite agents never install these either, so a missing one is a host-setup gap
+   either way; better to see that up front than as a mysterious failure inside a hook.
 2. **`map-env`** exports CircleCI's own job-context variables under their documented
    Buildkite names (`BUILDKITE_BRANCH`, `BUILDKITE_COMMIT`, ...) - see the
    [mapping table](#circle_-buildkite_-environment-mapping) below.
 3. **`configure`** flattens your `config:` YAML onto `BUILDKITE_PLUGIN_<NAME>_<KEY>`
-   variables using the *exact* algorithm `buildkite-agent` uses (verified against its
-   source - see [Config flattening](#config-flattening)), after passing it through
+   variables following Buildkite's own documented config-flattening convention
+   (independently verified against real plugin configs and hooks - see
+   [Config flattening](#config-flattening)), after passing it through
    `circleci env subst` so you can reference `$MY_SECRET` without the value ever
    appearing in your CircleCI config.
 4. **`install-agent-shim`** puts a `buildkite-agent` shim on `$PATH`, since plugin
@@ -120,9 +124,10 @@ base mapping, also passed through `circleci env subst`).
 
 ## Config flattening
 
-`configure` reimplements `buildkite-agent`'s own `flattenConfigToEnvMap`/`formatEnvKey`
-(verified against `agent/plugin/plugin.go`), against a deliberately small subset of
-block-style YAML - scalars, sequences, and (arbitrarily nested) mappings. No flow-style
+`configure` reimplements Buildkite's own documented config-flattening convention
+(independently verified against real plugin configs and the hooks that read them -
+see the [Verified targets](#verified-targets) section), against a deliberately small
+subset of block-style YAML - scalars, sequences, and (arbitrarily nested) mappings. No flow-style
 (`{a: b}`), multi-line scalars, anchors/aliases, or same-line trailing `#` comments.
 Every real config in the vault-secrets, aws-assume-role-with-web-identity and trivy
 plugins' own READMEs (this orb's verified targets) parses correctly with this subset -
@@ -150,7 +155,8 @@ The `<NAME>` prefix is derived from the plugin's **repository name**, not the `n
 field inside `plugin.yml` - stripping a trailing `-buildkite-plugin` suffix, then
 uppercasing with hyphens/spaces turned into underscores. A plugin referenced by a full
 git URL whose repo doesn't end in `-buildkite-plugin` gets `_GIT` appended (both rules
-verified against `agent/plugin/plugin.go` and confirmed by fetching real plugin repos).
+independently verified against Buildkite's own documentation and by fetching real
+plugin repos and checking their derived prefix against what their own hooks read).
 
 **Not implemented:** `BUILDKITE_PLUGIN_CONFIGURATION` (the whole config as one JSON
 string) and `BUILDKITE_PLUGIN_VALIDATION`-gated schema validation against `plugin.yml`'s
@@ -162,7 +168,7 @@ read either of these - see ["What does not work"](#what-does-not-work).
 `run-hooks` runs whichever of these hook files exist, **in this order**, each as its
 own process:
 
-`pre-checkout` → `checkout` → `post-checkout` → `environment` → `pre-command` →
+`environment` → `pre-checkout` → `checkout` → `post-checkout` → `pre-command` →
 `command` → `post-command` → `pre-artifact` → `post-artifact` → `pre-exit`
 
 By default it runs everything **except `checkout`, `pre-artifact` and `post-artifact`**

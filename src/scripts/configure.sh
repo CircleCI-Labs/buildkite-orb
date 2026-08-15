@@ -2,8 +2,10 @@
 set -uo pipefail
 
 # Flattens a block-style YAML mapping (scalars, one-or-more-level nested mappings, and
-# sequences of scalars) into BUILDKITE_PLUGIN_<NAME>_<KEY> environment variables, using
-# the same rules as buildkite-agent's flattenConfigToEnvMap()/formatEnvKey():
+# sequences of scalars) into BUILDKITE_PLUGIN_<NAME>_<KEY> environment variables,
+# following the same flattening rules Buildkite documents and that real plugin configs
+# rely on (buildkite.com/docs/pipelines/integrations/plugins), independently observed
+# against real plugin.yml/README config shapes:
 #   - a scalar value assigns BUILDKITE_PLUGIN_<NAME>_<KEY> directly
 #   - a sequence gets _0, _1, _2, ... suffixes per item
 #   - a nested mapping gets a _<SUBKEY> suffix per field (recursively)
@@ -37,7 +39,15 @@ else
 fi
 
 format_env_key() {
-    printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | sed -E 's/[- ]/_/g'
+    # Uppercase, then turn ANY character outside [A-Za-z0-9_] into an underscore - not
+    # just hyphens/spaces. A bare `export NAME=value` requires NAME to be a legal bash
+    # identifier; real buildkite-agent (a Go program) has no such restriction and would
+    # happily set an env var literally named e.g. BUILDKITE_PLUGIN_X_DOCKER.HOST, but
+    # this orb's `export "${name}=${value}"` would hard-fail on that name (see the
+    # README's Config flattening section for this documented divergence). Collapsing the
+    # full punctuation class, not just hyphen/space, keeps every derived name a legal
+    # bash identifier so `export` can never fail here.
+    printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | sed -E 's/[^A-Z0-9_]/_/g'
 }
 
 strip_quotes() {
@@ -55,6 +65,9 @@ export_leaf() {
     # export_leaf PREFIX RAW_VALUE
     local name="$1" value quoted
     value="$(strip_quotes "$2")"
+    if [[ "${value}" == "{"* || "${value}" == "["* ]]; then
+        echo "configure: WARNING: ${name} looks like flow-style YAML ('${value}') - this orb's config flattening only supports block-style YAML (see the README's 'Config flattening' section) and will export this value as one opaque, unparsed string rather than flattening it further. Rewrite this key as block-style if the plugin's hook expects it flattened." >&2
+    fi
     printf -v quoted '%q' "${value}"
     echo "export ${name}=${quoted}" >> "${BASH_ENV}"
     export "${name}=${value}"

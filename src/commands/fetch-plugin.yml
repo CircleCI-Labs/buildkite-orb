@@ -5,8 +5,11 @@ description: >
   `https://`/`ssh://`/`file://` git URL - each optionally followed by `#ref` and, for
   full URLs, an optional in-repo subdirectory. Exports BUILDKITE_PLUGIN_ROOT (the
   directory containing the plugin's plugin.yml and hooks/) and BUILDKITE_PLUGIN_NAME /
-  BUILDKITE_PLUGIN_ENV_PREFIX (derived exactly the way the real buildkite-agent derives
-  them) into $BASH_ENV for the `configure` and `run-hooks` commands to use.
+  BUILDKITE_PLUGIN_ENV_PREFIX (derived following Buildkite's own documented plugin
+  naming convention) into $BASH_ENV for the `configure` and `run-hooks` commands to use.
+  Also warns (non-fatally) if plugin.yml's `requirements:` list names a command that
+  isn't on $PATH - Buildkite agents never install these either, so a missing one would
+  otherwise surface as a confusing failure deep inside a hook instead.
 
 parameters:
   plugin:
@@ -46,6 +49,20 @@ steps:
               ORB_VAL_PLUGIN: << parameters.plugin >>
             command: |
               echo "$ORB_VAL_PLUGIN" > /tmp/.buildkite-plugin-ref
+        - run:
+            # restore_cache extracts on top of whatever is already at plugin-dir rather
+            # than clearing it first. Without this, calling fetch-plugin twice against
+            # the same default plugin-dir for two DIFFERENT plugins in the same
+            # pipeline history can restore plugin B's cache on top of plugin A's
+            # leftover checkout - the staleness guard in fetch-plugin.sh only checks
+            # that _resolved_ref matches the requested ref, which it correctly does for
+            # B, so a hook file unique to A (that B doesn't ship) can silently survive
+            # on disk and get run as if it belonged to B. Always start from empty so a
+            # cache hit only ever extracts into a clean directory.
+            name: Clearing plugin-dir before cache restore
+            environment:
+              ORB_VAL_PLUGIN_DIR: << parameters.plugin-dir >>
+            command: rm -rf "$ORB_VAL_PLUGIN_DIR"
         - restore_cache:
             name: Restoring cache for Buildkite plugin clone...
             keys:

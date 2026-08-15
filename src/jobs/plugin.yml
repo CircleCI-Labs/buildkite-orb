@@ -20,7 +20,7 @@ parameters:
     description: Shell command to run when the plugin defines no hooks/command file of its own.
   hooks:
     type: string
-    default: "pre-checkout,post-checkout,environment,pre-command,command,post-command,pre-exit"
+    default: "environment,pre-checkout,post-checkout,pre-command,command,post-command,pre-exit"
     description: Comma-separated hook names to run, in Buildkite's fixed order - see the run-hooks command.
   executor:
     type: executor

@@ -63,6 +63,16 @@ if [[ -n "${ORB_VAL_EXTRA_ENV}" ]]; then
         [[ "${line}" != *"="* ]] && continue
         key="${line%%=*}"
         value="${line#*=}"
+        # CircleCI's default `-e` run-step shell means a failing `export` here would
+        # abort this whole script mid-loop - after it had already written the bad line
+        # to $BASH_ENV, which would then break every later step's shell startup too (each
+        # one sources $BASH_ENV). Validate the key is a legal bash identifier BEFORE
+        # calling export_var, and skip (loudly) rather than crash or silently rewrite the
+        # name the user asked for.
+        if [[ ! "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+            echo "map-env: skipping extra-env entry '${line}' - '${key}' is not a legal environment variable name (must match [A-Za-z_][A-Za-z0-9_]*)." >&2
+            continue
+        fi
         export_var "${key}" "${value}"
     done <<< "${RAW_EXTRA_ENV}"
 fi

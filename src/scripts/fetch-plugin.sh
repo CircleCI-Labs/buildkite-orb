@@ -3,7 +3,10 @@ set -euo pipefail
 
 # Resolves a Buildkite plugin reference to a git URL + ref (+ optional in-repo
 # subdirectory), clones it, and derives the BUILDKITE_PLUGIN_<NAME>_ env-var prefix
-# using the same algorithm buildkite-agent uses (see agent/plugin/plugin.go):
+# following the same naming rules Buildkite documents and real plugin repos rely on
+# (buildkite.com/docs/pipelines/integrations/plugins/using,
+# buildkite.com/docs/pipelines/integrations/plugins/writing), independently observed
+# against real plugin repos:
 #
 #   1. The name is taken from the repository (or subdirectory) name, NOT the
 #      `name:` field inside plugin.yml.
@@ -31,8 +34,27 @@ if [[ -z "${PLUGIN_REF}" ]]; then
     exit 1
 fi
 
+# Passed through `circleci env subst` first, like `configure`'s config and `map-env`'s
+# extra-env, so a private-repo reference can embed a credential as "$MY_TOKEN" (e.g.
+# "https://oauth2:$MY_TOKEN@github.com/org/priv-buildkite-plugin.git#v1") without that
+# secret's value ever appearing in the CircleCI config itself. The plugin reference
+# string is still passed through to git VERBATIM after substitution - no version
+# resolution logic of any kind is applied.
+if command -v circleci > /dev/null 2>&1; then
+    PLUGIN_REF="$(circleci env subst <<< "${PLUGIN_REF}")"
+else
+    echo "fetch-plugin: 'circleci' CLI not found on PATH - using the plugin reference as-is, without \$VAR substitution." >&2
+fi
+
+# redact_userinfo URL - masks a "user:pass@" (or "user@") prefix before a build log ever
+# sees it, so a credential embedded directly in a plugin git URL isn't echoed in plain
+# text below.
+redact_userinfo() {
+    printf '%s' "$1" | sed -E 's#^([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@]+@#\1***REDACTED***@#'
+}
+
 format_env_key() {
-    # Uppercase, then hyphens/spaces -> underscores. Mirrors formatEnvKey() exactly.
+    # Uppercase, then hyphens/spaces -> underscores.
     printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | sed -E 's/[- ]/_/g'
 }
 
@@ -48,6 +70,20 @@ if [[ "${PLUGIN_REF}" == *"#"* ]]; then
 else
     REF=""
     LOCATION="${PLUGIN_REF}"
+fi
+
+# REF reaches `git checkout "${REF}"` (no `--` separator - see below) as a bare
+# argument. A REF starting with `-` would be parsed by git as an OPTION rather than a
+# ref - e.g. "--orphan=pwned" would make git create a new orphan branch instead of
+# checking anything out, silently (exit 0) landing PLUGIN_ROOT on the wrong content
+# instead of failing loudly. No legitimate git ref name can start with `-` (git itself
+# refuses to create one via `git branch -- -name`), so reject it outright rather than
+# trying to shell-escape around it - a `--` separator on `checkout` would "fix" the
+# injection but also breaks checking out a perfectly normal tag/branch/SHA, because
+# `checkout -- <ref>` is git's "restore this pathspec" form, not "switch to this ref".
+if [[ -n "${REF}" && "${REF}" == -* ]]; then
+    echo "fetch-plugin: the ref '${REF}' in plugin reference '${PLUGIN_REF}' is not a valid git ref (refs cannot start with '-') - refusing to pass it to git." >&2
+    exit 1
 fi
 
 NEEDS_GIT_SUFFIX=false
@@ -99,8 +135,8 @@ if [[ "${NEEDS_GIT_SUFFIX}" == "true" ]]; then
 fi
 ENV_PREFIX="BUILDKITE_PLUGIN_${ENV_NAME}"
 
-echo "Resolved plugin reference '${PLUGIN_REF}':"
-echo "  repo:   ${REPO_URL}"
+echo "Resolved plugin reference '$(redact_userinfo "${PLUGIN_REF}")':"
+echo "  repo:   $(redact_userinfo "${REPO_URL}")"
 echo "  ref:    ${REF:-<none - cloning default branch>}"
 echo "  subdir: ${SUBDIR:-<none>}"
 echo "  env prefix: ${ENV_PREFIX}_"
@@ -142,6 +178,22 @@ fi
 
 if [[ -n "${SUBDIR}" ]]; then
     PLUGIN_ROOT="${CLONE_TARGET}/${SUBDIR}"
+    # SUBDIR comes straight from the plugin reference's "...git/<subdir>#ref" form and
+    # is used unsanitized above - a reference like
+    # "https://github.com/org/repo.git/../../etc#main" would otherwise resolve
+    # PLUGIN_ROOT to somewhere outside CLONE_TARGET entirely (e.g. /tmp/etc), and
+    # run-hooks would then look for hooks/* at that arbitrary filesystem location.
+    # Canonicalize and verify the result is still inside the clone before trusting it.
+    RESOLVED_PLUGIN_ROOT="$(realpath -m -- "${PLUGIN_ROOT}")"
+    RESOLVED_CLONE_TARGET="$(realpath -m -- "${CLONE_TARGET}")"
+    case "${RESOLVED_PLUGIN_ROOT}" in
+        "${RESOLVED_CLONE_TARGET}" | "${RESOLVED_CLONE_TARGET}"/*) ;;
+        *)
+            echo "fetch-plugin: subdirectory '${SUBDIR}' resolves to '${RESOLVED_PLUGIN_ROOT}', outside the cloned plugin repository at '${RESOLVED_CLONE_TARGET}' - refusing to use it." >&2
+            exit 1
+            ;;
+    esac
+    PLUGIN_ROOT="${RESOLVED_PLUGIN_ROOT}"
 else
     PLUGIN_ROOT="${CLONE_TARGET}"
 fi
@@ -149,6 +201,50 @@ fi
 if [[ ! -f "${PLUGIN_ROOT}/plugin.yml" ]]; then
     echo "WARNING: no plugin.yml found at ${PLUGIN_ROOT}. Continuing anyway - hooks will still run if present, but there is no schema to validate config against." >&2
 fi
+
+# check_requirements PLUGIN_YML - plugin.yml can declare a top-level `requirements:`
+# list of command names its hooks assume are already on $PATH (e.g. vault, aws, jq).
+# Real buildkite-agent never installs these either - they're an assumption about the
+# host - so a missing one normally surfaces as a confusing failure deep inside a hook
+# ("vault: command not found"). Warn up front instead, naming exactly what's missing,
+# so the real cause is obvious immediately rather than a mystery to debug. Deliberately
+# a warning, not a hard failure: a hook may only need a listed requirement on a code
+# path this particular run doesn't take, so refusing to even try would be too strict.
+check_requirements() {
+    local plugin_yml="$1"
+    [[ -f "${plugin_yml}" ]] || return 0
+    local in_block=false line item
+    local -a missing=()
+    while IFS= read -r line; do
+        if [[ "${in_block}" == "false" ]]; then
+            [[ "${line}" == "requirements:"* ]] && in_block=true
+            continue
+        fi
+        if [[ "${line}" =~ ^[[:space:]]*-[[:space:]]*(.+)[[:space:]]*$ ]]; then
+            item="${BASH_REMATCH[1]}"
+            item="$(strip_quotes "${item}")"
+            command -v "${item}" > /dev/null 2>&1 || missing+=("${item}")
+        elif [[ -n "${line}" ]]; then
+            in_block=false
+        fi
+    done < "${plugin_yml}"
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "fetch-plugin: WARNING: this plugin's plugin.yml lists 'requirements:' not found on \$PATH: ${missing[*]}. Buildkite agents never install these either - install them yourself (or switch to an image/executor that has them) before hooks that need them run, or expect a less obvious failure from deep inside a hook script." >&2
+    fi
+}
+
+strip_quotes() {
+    local v="$1"
+    if [[ "${v}" =~ ^\"(.*)\"$ ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    elif [[ "${v}" =~ ^\'(.*)\'$ ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    else
+        printf '%s' "${v}"
+    fi
+}
+
+check_requirements "${PLUGIN_ROOT}/plugin.yml"
 
 if [[ -d "${PLUGIN_ROOT}/hooks" ]]; then
     chmod +x "${PLUGIN_ROOT}"/hooks/* 2> /dev/null || true

@@ -1,8 +1,8 @@
 description: >
   Run the plugin's hooks, in Buildkite's documented lifecycle order, each as its own
   process - and thread each hook's environment-variable changes (additions, changes and
-  removals) forward to the next hook, exactly the way buildkite-agent's own
-  scriptwrapper does: dump the environment before the hook, dot-source the hook file
+  removals) forward to the next hook, matching Buildkite's own documented "a note on
+  sourcing" behaviour: dump the environment before the hook, dot-source the hook file
   inside a disposable wrapper script, dump the environment after, diff the two, and
   apply the diff (not the hook's shell state) forward. The final accumulated diff is
   exported into $BASH_ENV so native CircleCI steps after this one see it too. Requires
@@ -11,7 +11,7 @@ description: >
 parameters:
   hooks:
     type: string
-    default: "pre-checkout,post-checkout,environment,pre-command,command,post-command,pre-exit"
+    default: "environment,pre-checkout,post-checkout,pre-command,command,post-command,pre-exit"
     description: >
       Comma-separated hook names to run, in Buildkite's fixed order (only the ones
       listed here run; missing hook files are silently skipped). `checkout` and

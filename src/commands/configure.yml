@@ -1,11 +1,10 @@
 description: >
   Flatten the `config` YAML string into BUILDKITE_PLUGIN_<NAME>_<KEY> environment
-  variables, using the exact flattening algorithm buildkite-agent uses (scalars assign
-  directly, arrays get _0/_1/... suffixes, nested objects get _SUBKEY suffixes - see
-  agent/plugin/plugin.go's flattenConfigToEnvMap). Run `fetch-plugin` first so
-  BUILDKITE_PLUGIN_ENV_PREFIX is set. The config string is passed through
-  `circleci env subst` first, so you can write $MY_SECRET inside it without the
-  secret's value ever appearing in your CircleCI config.
+  variables, following Buildkite's own documented config-flattening convention
+  (scalars assign directly, arrays get _0/_1/... suffixes, nested objects get _SUBKEY
+  suffixes). Run `fetch-plugin` first so BUILDKITE_PLUGIN_ENV_PREFIX is set. The config
+  string is passed through `circleci env subst` first, so you can write $MY_SECRET
+  inside it without the secret's value ever appearing in your CircleCI config.
 
 parameters:
   config:

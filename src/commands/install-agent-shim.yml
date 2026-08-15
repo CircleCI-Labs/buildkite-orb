@@ -1,11 +1,11 @@
 description: >
   Write a `buildkite-agent` shim onto $PATH so plugin hooks that shell out to it don't
   fail with "command not found". `artifact` and single-job `meta-data` are reimplemented
-  against a local directory; `env`/`pty`/`terminate` are reimplemented locally too;
-  everything that genuinely requires Buildkite's own control plane (`annotate`,
-  `pipeline`, `step`, `oidc`, `secret`, `lock`, cross-job `meta-data`) exits non-zero
-  with a message naming the subcommand and pointing at the README - see its
-  "buildkite-agent subcommands" table for the full list and rationale.
+  against a local directory; `env` (`dump`/`get`/`set`) and read-only `workdir` are
+  reimplemented locally too; everything that genuinely requires Buildkite's own control
+  plane (`annotate`, `pipeline`, `step`, `oidc`, `secret`, `lock`, `redactor`, cross-job
+  `meta-data`) exits non-zero with a message naming the subcommand and pointing at the
+  README - see its "buildkite-agent subcommands" table for the full list and rationale.
 
 parameters:
   shim-dir:
