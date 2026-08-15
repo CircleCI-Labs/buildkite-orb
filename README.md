@@ -13,7 +13,7 @@ CircleCI Labs, including this repo, is a collection of solutions developed by me
 
 ---
 
-## What this is (and isn't)
+## Scope: one plugin per call, not a whole pipeline
 
 This orb runs **one plugin per step**, faithfully - it is not a Buildkite pipeline
 emulator. It doesn't understand `pipeline.yml`, doesn't chain multiple plugins'
@@ -63,16 +63,16 @@ executor overrides.
    either way; better to see that up front than as a mysterious failure inside a hook.
 2. **`map-env`** exports CircleCI's own job-context variables under their documented
    Buildkite names (`BUILDKITE_BRANCH`, `BUILDKITE_COMMIT`, ...) - see the
-   [mapping table](#circle_-buildkite_-environment-mapping) below.
-3. **`configure`** flattens your `config:` YAML onto `BUILDKITE_PLUGIN_<NAME>_<KEY>`
+   [mapping table](#circle_---buildkite_-environment-mapping) below.
+3. **`install-agent-shim`** puts a `buildkite-agent` shim on `$PATH`, since plugin
+   hooks unconditionally shell out to it - see the
+   [subcommand table](#buildkite-agent-subcommands) below.
+4. **`configure`** flattens your `config:` YAML onto `BUILDKITE_PLUGIN_<NAME>_<KEY>`
    variables following Buildkite's own documented config-flattening convention
    (independently verified against real plugin configs and hooks - see
    [Config flattening](#config-flattening)), after passing it through
    `circleci env subst` so you can reference `$MY_SECRET` without the value ever
    appearing in your CircleCI config.
-4. **`install-agent-shim`** puts a `buildkite-agent` shim on `$PATH`, since plugin
-   hooks unconditionally shell out to it - see the
-   [subcommand table](#buildkite-agent-subcommands) below.
 5. **`run-hooks`** runs the plugin's `hooks/*` files, each as its **own process**, in
    Buildkite's documented lifecycle order - see
    [Hooks and their CircleCI-native equivalents](#hooks-and-their-circleci-native-equivalents).
@@ -94,8 +94,8 @@ executor overrides.
 flowchart TD
     A[checkout] --> B["fetch-plugin<br/>resolve ref, git clone (cached)<br/>warns on missing plugin.yml requirements:"]
     B --> C["map-env<br/>CIRCLE_* -&gt; BUILDKITE_* into $BASH_ENV"]
-    C --> D["configure<br/>flatten config: -&gt; BUILDKITE_PLUGIN_&lt;NAME&gt;_* <br/>circleci env subst resolves $SECRETS"]
-    D --> E["install-agent-shim<br/>buildkite-agent reimplementation on PATH"]
+    C --> D["install-agent-shim<br/>buildkite-agent reimplementation on PATH"]
+    D --> E["configure<br/>flatten config: -&gt; BUILDKITE_PLUGIN_&lt;NAME&gt;_* <br/>circleci env subst resolves $SECRETS"]
     E --> F["run-hooks<br/>each hook its OWN process, fixed lifecycle order<br/>env-diff threaded forward between hooks + into $BASH_ENV"]
     F --> G[store_artifacts<br/>shim's artifact-dir]
 
@@ -111,7 +111,62 @@ the next hook. This orb reimplements that exactly, which is also why it needs th
 regression coverage of the four sibling orbs (exit-code precedence, env-diff threading
 itself, fetch idempotency) -- see [Verified targets](#verified-targets) below.
 
-## `CIRCLE_*` → `BUILDKITE_*` environment mapping
+## Mapping your existing config
+
+Here's a real Buildkite pipeline step using a plugin, next to this orb's equivalent:
+
+```yaml
+# pipeline.yml (Buildkite)
+steps:
+  - label: ":mag: Scan for vulnerabilities"
+    command: "echo 'scanning repository'"
+    plugins:
+      - equinixmetal-buildkite/trivy#v1.22.0:
+          severity: "CRITICAL,HIGH"
+```
+
+```yaml
+# .circleci/config.yml (this orb)
+version: 2.1
+orbs:
+  buildkite: cci-labs/buildkite@x.y.z
+workflows:
+  main:
+    jobs:
+      - buildkite/plugin:
+          plugin: "equinixmetal-buildkite/trivy#v1.22.0"
+          config: |
+            severity: "CRITICAL,HIGH"
+          command: "echo 'scanning repository'"
+```
+
+What actually changed, concept by concept:
+
+- **A Buildkite step's `plugins:` entry becomes a `buildkite/plugin` command (inline, among
+  native steps) or job (standalone).** The plugin reference (`org/name#ref`) maps straight onto
+  this orb's `plugin` parameter, unchanged -- `fetch-plugin` resolves it exactly the way real
+  Buildkite agents do (see "How it works" above).
+- **The plugin's config block (nested under the plugin's key in real Buildkite) becomes this
+  orb's `config:` parameter** -- the same YAML shape, just without the plugin-name key wrapping
+  it, since this orb already knows which plugin it's for from `plugin:`. `configure` flattens it
+  into `BUILDKITE_PLUGIN_<NAME>_<KEY>` the same way Buildkite's own agent would (see "Config
+  flattening" below).
+- **The step's own `command:`** maps directly onto this orb's `command` parameter -- it only
+  actually runs if the plugin defines no `hooks/command` of its own, exactly matching real
+  Buildkite's precedence (see "Hooks and their CircleCI-native equivalents" below).
+- **Where the vendor's env vars come from doesn't change on this axis** the way it does for the
+  hosted-account bridges: real Buildkite also expects most secrets as plain agent/pipeline
+  environment variables, so `$MY_SECRET`-style references work the same way here, resolved via
+  `circleci env subst` instead of Buildkite's own agent environment hooks -- see "`CIRCLE_*` ->
+  `BUILDKITE_*` environment mapping" below for the values only Buildkite's control plane can
+  produce (`BUILDKITE_AGENT_ACCESS_TOKEN`, and similar) that have no equivalent here at all.
+- **What Buildkite's control plane does for you that CircleCI does natively instead:** the
+  `buildkite-agent artifact upload`/`meta-data`/`env` calls a hook makes are answered by this
+  orb's own local shim (see "`buildkite-agent` subcommands" below) rather than a real agent
+  talking to `agent.buildkite.com` -- `store_artifacts` on the shim's `artifact-dir` is the
+  direct CircleCI-native equivalent of an uploaded Buildkite artifact.
+
+## `CIRCLE_*` -> `BUILDKITE_*` environment mapping
 
 Set by `map-env` (and by `plugin`/the `plugin` job, which call it by default - set
 `map-env: false` to skip it).
@@ -226,7 +281,7 @@ plugin repos and checking their derived prefix against what their own hooks read
 **Not implemented:** `BUILDKITE_PLUGIN_CONFIGURATION` (the whole config as one JSON
 string) and `BUILDKITE_PLUGIN_VALIDATION`-gated schema validation against `plugin.yml`'s
 `configuration` JSON Schema. None of this orb's three verified target plugins' hooks
-read either of these - see ["What does not work"](#what-does-not-work).
+read either of these - see ["Limits"](#limits).
 
 ## Hooks and their CircleCI-native equivalents
 
@@ -350,7 +405,7 @@ not invented - see [`src/examples/`](src/examples/).
   - it downloads its own scanner binary and scans the checked-out filesystem - which is
   why this is also the orb's own CI test (see [`.circleci/test-deploy.yml`](.circleci/test-deploy.yml)).
 
-## What does not work
+## Limits
 
 - **`buildkite-agent pipeline upload` and `step`** - no CircleCI equivalent at all; see
   the subcommand table above.
@@ -456,6 +511,81 @@ Buildkite Agent with other software to create a new product; this orb never touc
 that binary or Buildkite's control plane at all, so that restriction doesn't apply to
 it. It does execute the separately MIT-licensed bash of whichever plugin repository you
 point it at, exactly as cloning and running any other open-source shell script would.
+
+## Commands and job reference
+
+| Name | Kind | What it does |
+|---|---|---|
+| `plugin` | command, job | The aggregate most users want: fetch-plugin -> map-env -> install-agent-shim -> configure -> run-hooks, in order. |
+| `fetch-plugin` | command | Resolves the plugin reference and git-clones it at the pinned ref, cached. |
+| `map-env` | command | Exports the CIRCLE_*->BUILDKITE_* mapping into `$BASH_ENV`. |
+| `install-agent-shim` | command | Puts a `buildkite-agent` reimplementation on `$PATH`. |
+| `configure` | command | Flattens `config:` onto `BUILDKITE_PLUGIN_<NAME>_<KEY>` variables. |
+| `run-hooks` | command | Runs the plugin's `hooks/*` files in Buildkite's fixed lifecycle order, with env-diff threading. |
+
+**Reach for the granular commands instead of the `plugin` aggregate when:** you're chaining
+multiple plugins in one job (give each `fetch-plugin` call its own `plugin-dir` -- see
+[`src/examples/chain_two_plugins.yml`](src/examples/chain_two_plugins.yml)), or you need native
+steps interleaved between individual stages -- e.g. inspecting the flattened
+`BUILDKITE_PLUGIN_*` vars after `configure` but before `run-hooks` executes the hooks.
+
+### `plugin` (command and job) parameters
+
+| Parameter | Type | Default | What it does |
+|---|---|---|---|
+| `executor` *(job only)* | executor | `docker` | `buildkite/docker` (plain bash hooks), `buildkite/machine` (hooks shell out to Docker), or `buildkite/docker-toolchains` (hooks need a real toolchain on `PATH`). |
+| `checkout` *(job only)* | boolean | `true` | Run native CircleCI checkout before the plugin's hooks. |
+| `plugin` | string | *(required)* | The plugin reference (`name#ref`, `org/name#ref`, or a full git URL, optionally with a subdirectory). |
+| `config` | string | `""` | The plugin's configuration as YAML, exactly as under a plugin's key in `pipeline.yml`. `$SECRET` resolved via `circleci env subst`. |
+| `command` | string | `""` | Shell command run when the plugin defines no `hooks/command` of its own. |
+| `hooks` | string | `environment,pre-checkout,post-checkout,pre-command,command,post-command,pre-exit` | Comma-separated filter of which hook names run -- a filter, not a sequence; always executed in Buildkite's fixed order. |
+| `label` | string | `Running Buildkite plugin hooks` | Step name for the hooks-running step -- override when chaining plugins so job-log steps are distinguishable. |
+| `map-env` | boolean | `true` | Run the `map-env` command before hooks. |
+| `extra-env` | string | `""` | Extra `KEY=VALUE` pairs applied after the base `map-env` mapping. |
+| `install-shim` | boolean | `true` | Run `install-agent-shim` before hooks. |
+| `shim-dir` | string | `/tmp/buildkite-agent-shim` | Directory the shim script is written to and prepended onto `PATH`. |
+| `artifact-dir` | string | `/tmp/buildkite-artifacts` | Directory `buildkite-agent artifact upload` copies matched files into. |
+| `meta-data-dir` | string | `/tmp/buildkite-meta-data` | Directory backing `buildkite-agent meta-data get/set`, this-job-only scope. |
+| `store-artifacts` *(job only)* | boolean | `true` | Auto-`store_artifacts` whatever hooks uploaded via the shim, from `artifact-dir`. |
+| `plugin-dir` | string | `/tmp/buildkite-plugin` | Directory the plugin's repo is cloned into. |
+| `plugin-cache` | boolean | `true` | Cache the cloned plugin repo, keyed on the plugin reference string. |
+| `always-clone-fresh` | boolean | `false` | Force a fresh clone even if a cache/prior clone exists (mirrors Buildkite's `BUILDKITE_PLUGINS_ALWAYS_CLONE_FRESH`). |
+| `working-directory` | string | `.` | Directory hooks start running from (Buildkite's `BUILDKITE_BUILD_CHECKOUT_PATH` equivalent). |
+| `cache-key-prefix` | string | `v1` | Prefix applied to every cache key this orb writes. |
+
+Individual commands (`fetch-plugin`, `map-env`, `install-agent-shim`, `configure`, `run-hooks`)
+expose the matching subset of these parameters under the same names -- see each command's own
+description on the [Orb Registry page](https://circleci.com/developer/orbs/orb/cci-labs/buildkite)
+for the exhaustive, always-current list.
+
+### Worked example: composing the granular commands by hand
+
+```yaml
+version: 2.1
+orbs:
+  buildkite: cci-labs/buildkite@x.y.z
+jobs:
+  scan:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - buildkite/fetch-plugin:
+          plugin: "equinixmetal-buildkite/trivy#v1.22.0"
+      - buildkite/map-env
+      - buildkite/install-agent-shim
+      - buildkite/configure:
+          config: |
+            severity: "CRITICAL,HIGH"
+      - buildkite/run-hooks:
+          command: "echo 'scanning repository'"
+      - store_artifacts:
+          path: /tmp/buildkite-artifacts
+workflows:
+  main:
+    jobs:
+      - scan
+```
 
 ## Resources
 
