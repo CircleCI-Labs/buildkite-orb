@@ -35,6 +35,31 @@ pipeline_provider() {
     esac
 }
 
+# Reserved shell/interpreter-control variable names that `extra-env` must never be
+# allowed to overwrite. extra-env is exported into $BASH_ENV, which every later step in
+# the job sources - an entry like "PATH=./evilbin:/usr/bin:/bin" or
+# "BASH_ENV=/tmp/pwned.sh" would otherwise rewrite the shell environment for every
+# subsequent step in the job. This is the same class of denylist the sibling
+# bitbucket-pipes-orb's map-env.sh (RESERVED_SHELL_VAR_NAMES) and harness-orb's
+# collect-outputs.sh already carry; buildkite-orb's map-env.sh did not have one until
+# this pass closed the gap (see the release-readiness audit's "coverage-gap-that-
+# reveals-a-behavior-gap" finding). Kept as an identical list to bitbucket's for
+# consistency across this orb family.
+RESERVED_SHELL_VAR_NAMES=(
+    PATH IFS BASH_ENV ENV SHELL SHELLOPTS PS4
+    LD_PRELOAD LD_LIBRARY_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
+    NODE_OPTIONS GIT_SSH_COMMAND PERL5LIB PYTHONPATH RUBYOPT CDPATH
+)
+is_reserved_shell_var_name() {
+    local candidate="$1" reserved
+    for reserved in "${RESERVED_SHELL_VAR_NAMES[@]}"; do
+        if [[ "${candidate}" == "${reserved}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 export_var BUILDKITE "true"
 export_var BUILDKITE_AGENT_NAME "circleci"
 export_var BUILDKITE_PIPELINE_PROVIDER "$(pipeline_provider)"
@@ -71,6 +96,10 @@ if [[ -n "${ORB_VAL_EXTRA_ENV}" ]]; then
         # name the user asked for.
         if [[ ! "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
             echo "map-env: skipping extra-env entry '${line}' - '${key}' is not a legal environment variable name (must match [A-Za-z_][A-Za-z0-9_]*)." >&2
+            continue
+        fi
+        if is_reserved_shell_var_name "${key}"; then
+            echo "map-env: skipping extra-env entry '${line}' - '${key}' is a reserved shell/interpreter-control variable; refusing to let extra-env overwrite it for every later step in this job." >&2
             continue
         fi
         export_var "${key}" "${value}"

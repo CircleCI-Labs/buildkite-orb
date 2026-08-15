@@ -446,6 +446,67 @@ jobs:
             grep -qx "idempotency-repo-two" "${BUILDKITE_PLUGIN_ROOT}/f.txt"
             echo "OK: fetching a second, different plugin into the same plugin-dir did not reuse the first plugin's stale clone."
 
+  # Gap-closing test, per the release-readiness audit: map-env.sh's CIRCLE_* ->
+  # BUILDKITE_* mapping was only ever exercised INDIRECTLY inside buildkite/plugin
+  # calls -- no test ever asserted the mapping itself is correct, unlike the sibling
+  # bitbucket-pipes-orb's dedicated map_env_isolation job. Tests map-env in isolation
+  # (not via the `plugin` aggregate): checkout, run map-env, assert its output directly
+  # against the real CIRCLE_* variables it was derived from.
+  map_env_isolation:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - buildkite/map-env
+      - run:
+          name: Assert the CIRCLE_* -> BUILDKITE_* mapping
+          command: |
+            set -euo pipefail
+            test "${BUILDKITE}" = "true"
+            test "${BUILDKITE_AGENT_NAME}" = "circleci"
+            test "${BUILDKITE_BRANCH}" = "${CIRCLE_BRANCH:-}"
+            test "${BUILDKITE_COMMIT}" = "${CIRCLE_SHA1}"
+            test "${BUILDKITE_ORGANIZATION_SLUG}" = "${CIRCLE_PROJECT_USERNAME}"
+            test "${BUILDKITE_PIPELINE_SLUG}" = "${CIRCLE_PROJECT_REPONAME}"
+            test "${BUILDKITE_BUILD_NUMBER}" = "${CIRCLE_BUILD_NUM}"
+            case "${BUILDKITE_REPO}" in
+              *github.com*) test "${BUILDKITE_PIPELINE_PROVIDER}" = "github" ;;
+              *) echo "Repo URL doesn't contain github.com; skipping provider-guess assertion." ;;
+            esac
+            # Not a PR build in this repo's own CI -- BUILDKITE_PULL_REQUEST must be the
+            # literal string "false", matching Buildkite's own documented value exactly.
+            test "${BUILDKITE_PULL_REQUEST}" = "false"
+            echo "OK: map-env's CIRCLE_* -> BUILDKITE_* mapping looks correct."
+
+  # Regression test for the reserved-shell-variable-name denylist added to
+  # map-env.sh's extra-env handling in this pass (see that script's own comment) --
+  # buildkite-orb was the one orb in this family without it; PATH/BASH_ENV/etc. must be
+  # refused, not exported, since every later step in the job sources $BASH_ENV.
+  test_map_env_extra_env_reserved_name_regression:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: "Regression test - PATH/BASH_ENV cannot be rewritten via extra-env"
+          command: |
+            set -euo pipefail
+            bash_env_file="$(mktemp)"
+            BASH_ENV="${bash_env_file}" \
+              ORB_VAL_EXTRA_ENV=$'PATH=./evilbin:/usr/bin:/bin\nBASH_ENV=/tmp/pwned.sh\nGOOD_VAR=ok' \
+              bash src/scripts/map-env.sh
+            if grep -qE '^export (PATH|BASH_ENV)=' "${bash_env_file}"; then
+              echo "FAIL: PATH or BASH_ENV was rewritten via extra-env:" >&2
+              grep -E '^export (PATH|BASH_ENV)=' "${bash_env_file}" >&2
+              exit 1
+            fi
+            if ! grep -q '^export GOOD_VAR=' "${bash_env_file}"; then
+              echo "FAIL: expected GOOD_VAR to still be exported, got:" >&2
+              cat "${bash_env_file}" >&2
+              exit 1
+            fi
+            echo "OK: PATH/BASH_ENV cannot be rewritten via extra-env; a well-formed override still works."
+
 workflows:
   test-deploy:
     jobs:
@@ -455,6 +516,32 @@ workflows:
           filters: *filters
       - test_real_plugin_trivy:
           name: "Testing a real plugin (trivy, credential-free)"
+          filters: *filters
+      # Exercises the new, opt-in buildkite/docker-toolchains executor -- the vendor-
+      # image research's one clean win across all four ecosystem-bridge orbs: a real,
+      # actively-maintained (rebuilt daily) Buildkite-published image with node/go/aws-
+      # cli/gcloud already on PATH, for a plugin whose hooks assume a real toolchain is
+      # already there. Pulls the REAL default image (not a cheap override -- unlike
+      # bitrise-orb's 10+GB opt-in Android image, this one is ~1GB and rebuilt daily,
+      # so pulling the real default here is cheap enough to be worth it) and asserts
+      # both that the plugin machinery works unmodified on this executor AND that the
+      # toolchain it exists for is genuinely present.
+      - buildkite/plugin:
+          name: "Testing the docker-toolchains executor (real image, node/aws-cli present)"
+          plugin: "equinixmetal-buildkite/trivy#v1.22.0"
+          config: |
+            exit-code: 0
+          command: "echo scanning-repository"
+          executor: buildkite/docker-toolchains
+          post-steps:
+            - run:
+                name: "Assert: the plugin ran normally AND the toolchain image's own tools are on PATH"
+                command: |
+                  set -euo pipefail
+                  test -n "$TRIVY_VERSION"
+                  node --version
+                  aws --version
+                  echo "OK: TRIVY_VERSION=$TRIVY_VERSION, and node/aws-cli (from the image, not this orb) are present."
           filters: *filters
       - buildkite/plugin:
           name: "Testing the plugin job: executor override + native pre/post-steps"
@@ -487,18 +574,25 @@ workflows:
           filters: *filters
       - test_fetch_plugin_idempotency:
           filters: *filters
+      - map_env_isolation:
+          filters: *filters
+      - test_map_env_extra_env_reserved_name_regression:
+          filters: *filters
       # The orb must be re-packed for publishing, and saved to the workspace.
       - orb-tools/pack:
           filters: *filters
           requires:
             - "Testing resolution, config flattening and env-diff threading"
             - "Testing a real plugin (trivy, credential-free)"
+            - "Testing the docker-toolchains executor (real image, node/aws-cli present)"
             - "Testing the plugin job: executor override + native pre/post-steps"
             - test_run_hooks_exit_precedence
             - test_configure_hyphenated_and_empty_config
             - test_fetch_plugin_ref_injection_regression
             - test_fetch_plugin_subdir_traversal_regression
             - test_fetch_plugin_idempotency
+            - map_env_isolation
+            - test_map_env_extra_env_reserved_name_regression
       - orb-tools/publish:
           name: "Publish Dev"
           orb_name: cci-labs/buildkite

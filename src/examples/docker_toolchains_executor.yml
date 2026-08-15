@@ -1,0 +1,20 @@
+description: >
+  Run a plugin whose hooks assume a real toolchain (node, go, ruby, aws-cli, gcloud) is
+  already on PATH, using Buildkite's own actively-maintained agent-base image instead
+  of installing tools yourself. See this orb's README ("Choosing an executor") for why
+  this is the one vendor convenience image worth adopting across the whole
+  ecosystem-bridge family, and the real doc-drift trap in Buildkite's own docs it works
+  around.
+
+usage:
+  version: 2.1
+  orbs:
+    buildkite: cci-labs/buildkite@x.y.z
+  workflows:
+    main:
+      jobs:
+        - buildkite/plugin:
+            plugin: "some-org/node-build-buildkite-plugin#v1.0.0"
+            config: |
+              build-command: "npm ci && npm run build"
+            executor: buildkite/docker-toolchains

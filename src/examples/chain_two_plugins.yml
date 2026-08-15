@@ -1,0 +1,40 @@
+description: >
+  Chain two Buildkite plugins in ONE job by calling the layered
+  fetch-plugin/configure/install-agent-shim/run-hooks commands (or the aggregate
+  `plugin` command) twice, giving each call a distinct `plugin-dir` so their clones
+  don't collide -- the pattern this orb's README describes narratively under "Layering
+  and future multi-plugin chaining." Each call's own env-diff is threaded into
+  $BASH_ENV independently, so a later native step (or the second plugin's hooks) can
+  read the first plugin's exported variables directly.
+
+usage:
+  version: 2.1
+  orbs:
+    buildkite: cci-labs/buildkite@x.y.z
+  jobs:
+    scan-then-notify:
+      docker:
+        - image: cimg/base:current
+      steps:
+        - checkout
+        - buildkite/plugin:
+            plugin: "equinixmetal-buildkite/trivy#v1.22.0"
+            plugin-dir: /tmp/buildkite-plugin-trivy
+            config: |
+              exit-code: 0
+              severity: "CRITICAL,HIGH"
+            command: "echo scanning-repository"
+            label: "Scan (trivy)"
+        - buildkite/plugin:
+            plugin: "some-org/slack-notify-buildkite-plugin#v1.0.0"
+            plugin-dir: /tmp/buildkite-plugin-notify
+            map-env: false
+            config: |
+              webhook: $SLACK_WEBHOOK
+              message: "Scan finished, TRIVY_VERSION=$TRIVY_VERSION"
+            label: "Notify (slack-notify)"
+  workflows:
+    main:
+      jobs:
+        - scan-then-notify:
+            context: slack-notify-creds

@@ -1,0 +1,33 @@
+description: >
+  A Docker executor for a Buildkite plugin whose hooks assume a real toolchain is
+  already on PATH (node, go, ruby, aws-cli, gcloud, buildkite-cli) -- the same failure
+  class fetch-plugin's own `requirements:` check warns about when a plugin.yml names a
+  command missing from PATH. Built and published DAILY by Buildkite itself
+  (github.com/buildkite/agent-base-images), MIT-licensed, amd64+arm64. Pulled from ECR
+  Public rather than Docker Hub specifically to avoid Docker Hub's anonymous-pull rate
+  limit -- verified while researching this orb's vendor-image options that Buildkite's
+  own docs (buildkite.com/docs/agent/buildkite-hosted/linux/custom-agent-images) point
+  at a DIFFERENT, stale image (buildkite/hosted-agent-base, last published over a year
+  ago as of this writing) than the actively-maintained one used here; this is a real
+  doc-drift trap in Buildkite's own docs, not a mistake in this orb. ~1GB image --
+  prefer the plain `buildkite/docker` executor (cimg/base) unless a plugin's own
+  `requirements:` genuinely needs what this carries.
+
+parameters:
+  image:
+    type: string
+    default: "public.ecr.aws/buildkite/agent-base:ubuntu-noble-hosted-toolchains"
+    description: >
+      The Buildkite hosted-agent base image to run the plugin's hooks in. The
+      "-hosted-toolchains" tag layers node (22/24), yarn, go (1.24/1.25/1.26), and Ruby
+      on top of the base "-hosted" tag's git/git-lfs/jq/python3/build-essential/
+      bazelisk/buildkite-cli/aws-cli/google-cloud-cli -- swap to the plain "-hosted" tag
+      (drop "-toolchains") if a plugin only needs the base layer's tools.
+  resource-class:
+    type: string
+    default: "medium"
+    description: The resource class for the executor.
+
+docker:
+  - image: << parameters.image >>
+resource_class: << parameters.resource-class >>

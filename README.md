@@ -90,6 +90,27 @@ executor overrides.
    interleaving - see below - and an automatic `store_artifacts` for whatever the hooks
    staged via `buildkite-agent artifact upload`).
 
+```mermaid
+flowchart TD
+    A[checkout] --> B["fetch-plugin<br/>resolve ref, git clone (cached)<br/>warns on missing plugin.yml requirements:"]
+    B --> C["map-env<br/>CIRCLE_* -&gt; BUILDKITE_* into $BASH_ENV"]
+    C --> D["configure<br/>flatten config: -&gt; BUILDKITE_PLUGIN_&lt;NAME&gt;_* <br/>circleci env subst resolves $SECRETS"]
+    D --> E["install-agent-shim<br/>buildkite-agent reimplementation on PATH"]
+    E --> F["run-hooks<br/>each hook its OWN process, fixed lifecycle order<br/>env-diff threaded forward between hooks + into $BASH_ENV"]
+    F --> G[store_artifacts<br/>shim's artifact-dir]
+
+    style C fill:#4a4a8a,color:#fff
+    style F fill:#4a4a8a,color:#fff
+```
+
+**The trickiest mechanism here is the env-diff threading inside `run-hooks`.** Real
+`buildkite-agent` doesn't source every hook into one long-lived shell -- it runs each
+hook as its own process, diffs the environment before and after, and threads *only that
+diff* (added/changed/removed variables, plus the hook's final working directory) into
+the next hook. This orb reimplements that exactly, which is also why it needs the most
+regression coverage of the four sibling orbs (exit-code precedence, env-diff threading
+itself, fetch idempotency) -- see [Verified targets](#verified-targets) below.
+
 ## `CIRCLE_*` → `BUILDKITE_*` environment mapping
 
 Set by `map-env` (and by `plugin`/the `plugin` job, which call it by default - set
@@ -121,7 +142,48 @@ either of these (rather than one of the `buildkite-agent` subcommands the shim c
 will not work here.
 
 Add or override entries with `extra-env` (one `KEY=VALUE` per line, applied after the
-base mapping, also passed through `circleci env subst`).
+base mapping, also passed through `circleci env subst`). An entry naming a reserved
+shell/interpreter-control variable (`PATH`, `BASH_ENV`, `IFS`, `LD_PRELOAD`, and
+similar -- the same list the sibling `bitbucket` orb's `map-env` and `harness` orb's
+`collect-outputs` already enforce) is refused with a warning, never exported: every
+later step in the job sources `$BASH_ENV`, so letting a hook (or a copy-paste mistake)
+rewrite one of these would affect every subsequent step, not just this one.
+
+## Choosing an executor
+
+Three executors, all opt-in (no default plugin-independent choice is forced on you):
+
+| Executor | When |
+|---|---|
+| `buildkite/docker` (default) | Most plugin hooks - plain bash, nothing more than `cimg/base` gives you. Starts faster, costs less. |
+| `buildkite/machine` | The hooks themselves shell out to `docker`/`docker-compose`, need a loopback Docker daemon, or need kernel-level access the `docker` executor's container can't provide. |
+| `buildkite/docker-toolchains` | The hooks assume a real toolchain (node, go, ruby, aws-cli, gcloud, `buildkite-cli`) is already on `PATH` - the same failure class `fetch-plugin`'s own `requirements:` warning flags. |
+
+`buildkite/docker-toolchains` wraps Buildkite's own `agent-base` image
+(`github.com/buildkite/agent-base-images`, MIT-licensed, rebuilt **daily**, amd64+arm64),
+pulled from ECR Public specifically to dodge Docker Hub's anonymous-pull rate limit. This
+was the one clean win identified while researching vendor convenience images across all
+four `cci-labs` ecosystem-bridge orbs: unlike the sibling `harness`/`bitbucket` orbs
+(where every plugin/pipe is already its own purpose-built image) and unlike `bitrise`
+(where the only public vendor image is a multi-year-stale snapshot), Buildkite's own
+base image is current, permissively licensed, and genuinely fills the gap `fetch-plugin`
+already warns about. **One real trap in Buildkite's own docs, found while researching
+this:** their docs (`buildkite.com/docs/agent/buildkite-hosted/linux/custom-agent-images`)
+point at `buildkite/hosted-agent-base`, a *different*, stale image (unmaintained for over
+a year as of this writing) - the actively-maintained successor this orb actually uses is
+`buildkite/agent-base` from a different GitHub repo. Don't follow that specific link in
+Buildkite's own docs expecting it to match what's below.
+
+```yaml
+- buildkite/plugin:
+    plugin: "some-org/some-plugin#v1.0.0"
+    executor: buildkite/docker-toolchains
+```
+
+Still ~1GB - prefer the plain `buildkite/docker` executor unless a plugin's own hooks
+genuinely need this. See the executor's own description for the exact tool list and how
+to switch to the smaller `-hosted` tag (drops node/go/ruby, keeps git/jq/python3/aws-
+cli/gcloud) if a plugin needs less than the full toolchain.
 
 ## Config flattening
 
