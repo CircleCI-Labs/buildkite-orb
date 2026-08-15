@@ -46,7 +46,27 @@ hook_listed() {
 # instead (matching Buildkite's own documented behaviour: a hook that cd's persists
 # that cd to the next hook and to the command), and re-exporting them as plain values
 # would fight with bash's own automatic PWD/OLDPWD management.
-EXCLUDE_RE='^declare -[a-zA-Z]*x[a-zA-Z]* (PWD|OLDPWD|_|SHLVL|BASH_ENV)='
+#
+# This list ALSO has to cover the orb's own bookkeeping channels, not just bash
+# internals - otherwise a hook (deliberately or not) exporting one of these gets
+# threaded into $BASH_ENV and silently overrides it for every later step in the job:
+#   - ORB_VAL_* is how the orb's own commands pass parameters into their scripts via
+#     the run step's `environment:` block; a hook that exports e.g. ORB_VAL_COMMAND
+#     would hijack a LATER, unrelated invocation's configured command the next time
+#     $BASH_ENV is sourced (bash sources it before every script's own body runs).
+#   - BUILDKITE_PLUGIN_ROOT/BUILDKITE_PLUGIN_ENV_PREFIX/BUILDKITE_PLUGIN_NAME are
+#     fetch-plugin's own bookkeeping for which plugin is active; a hook overriding
+#     these would misdirect a later fetch-plugin/configure/run-hooks call for a
+#     DIFFERENT plugin in the same job.
+#   - BUILDKITE_SHIM_ARTIFACT_DIR/BUILDKITE_SHIM_META_DATA_DIR are install-agent-shim's
+#     own bookkeeping for where the shim reads/writes; same reasoning.
+#   - RANDOM is bash's own PRNG seed variable - exporting it (even to its current
+#     value) bakes a fixed seed into $BASH_ENV, reseeding bash's RNG for every later
+#     step in the job.
+# Per-plugin config vars (BUILDKITE_PLUGIN_<NAME>_<KEY>, set by `configure`) are
+# deliberately NOT excluded here - a hook overriding its own plugin's config value for
+# a later hook of the SAME invocation is normal, documented Buildkite behaviour.
+EXCLUDE_RE='^declare -[a-zA-Z]*x[a-zA-Z]* (PWD|OLDPWD|_|SHLVL|BASH_ENV|RANDOM|ORB_VAL_[A-Za-z_]+|BUILDKITE_PLUGIN_ROOT|BUILDKITE_PLUGIN_ENV_PREFIX|BUILDKITE_PLUGIN_NAME|BUILDKITE_SHIM_ARTIFACT_DIR|BUILDKITE_SHIM_META_DATA_DIR)='
 
 # run_hook_file HOOK_PATH
 # Runs the hook in its own bash process, dumping the exported-variable set before and
@@ -175,6 +195,15 @@ for hook in environment pre-checkout checkout post-checkout pre-command command 
                 bash -c "${FALLBACK_COMMAND}"
                 COMMAND_EXIT=$?
             fi
+            # Real Buildkite exports BUILDKITE_COMMAND_EXIT_STATUS for post-command,
+            # pre-artifact, post-artifact and pre-exit hooks so they can act
+            # conditionally on the command's own outcome (a standard pattern for
+            # coverage-upload/notification plugins). Export it into this shell AND
+            # $BASH_ENV as soon as the command phase is known, so every later hook
+            # process (each its own `bash "${wrapper}"` invocation) and any later
+            # native step can read it.
+            export BUILDKITE_COMMAND_EXIT_STATUS="${COMMAND_EXIT}"
+            printf 'export BUILDKITE_COMMAND_EXIT_STATUS=%q\n' "${COMMAND_EXIT}" >> "${BASH_ENV}"
             ;;
         pre-exit)
             hook_file="${PLUGIN_ROOT}/hooks/pre-exit"
@@ -227,15 +256,17 @@ done
 # (buildkite.com/docs/agent/lifecycle#exit-codes):
 #   pre-command-or-earlier failure wins immediately (command never runs)
 #   > pre-exit failure always wins last
-#   > pre-artifact/post-artifact failure beats a successful command
-#   > post-command failure beats the command's own exit code
+#   > pre-artifact/post-artifact failure beats a successful command - but if the
+#     command itself already failed, a pre-artifact/post-artifact failure is
+#     DISCARDED and does not override the command's own (real) failure code
+#   > post-command failure beats the command's own exit code, in either case
 #   > the command's own exit code
 final_exit=0
 if [[ -n "${GATE_EXIT}" ]]; then
     final_exit="${GATE_EXIT}"
-elif [[ -n "${PRE_ARTIFACT_EXIT}" ]]; then
+elif [[ "${COMMAND_EXIT}" -eq 0 && -n "${PRE_ARTIFACT_EXIT}" ]]; then
     final_exit="${PRE_ARTIFACT_EXIT}"
-elif [[ -n "${POST_ARTIFACT_EXIT}" ]]; then
+elif [[ "${COMMAND_EXIT}" -eq 0 && -n "${POST_ARTIFACT_EXIT}" ]]; then
     final_exit="${POST_ARTIFACT_EXIT}"
 elif [[ -n "${POST_COMMAND_EXIT}" ]]; then
     final_exit="${POST_COMMAND_EXIT}"

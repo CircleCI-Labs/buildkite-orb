@@ -22,6 +22,14 @@ parameters:
     type: string
     default: "environment,pre-checkout,post-checkout,pre-command,command,post-command,pre-exit"
     description: Comma-separated hook names to run, in Buildkite's fixed order - see the run-hooks command.
+  label:
+    type: string
+    default: "Running Buildkite plugin hooks"
+    description: >
+      The CircleCI step name for the run-hooks step - override it (e.g. to the
+      plugin's own name) so it's distinguishable in the job log from another
+      invocation later in the same job. Mirrors a Buildkite step's own `label:` -
+      see the run-hooks command.
   executor:
     type: executor
     default: docker
@@ -103,6 +111,7 @@ steps:
       config: << parameters.config >>
       command: << parameters.command >>
       hooks: << parameters.hooks >>
+      label: << parameters.label >>
       map-env: << parameters.map-env >>
       extra-env: << parameters.extra-env >>
       install-shim: << parameters.install-shim >>

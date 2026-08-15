@@ -13,11 +13,20 @@ parameters:
     type: string
     default: "environment,pre-checkout,post-checkout,pre-command,command,post-command,pre-exit"
     description: >
-      Comma-separated hook names to run, in Buildkite's fixed order (only the ones
-      listed here run; missing hook files are silently skipped). `checkout` and
-      `pre-artifact`/`post-artifact` are deliberately excluded by default - see the
-      README's "hooks and CircleCI-native equivalents" section for why, and add them
-      here explicitly if you need them.
+      Comma-separated hook names to run - only the ones listed here run (missing hook
+      files are silently skipped), but they always execute in Buildkite's fixed
+      lifecycle order regardless of the order you list them in here; this parameter is
+      a filter, not a sequence. `checkout` and `pre-artifact`/`post-artifact` are
+      deliberately excluded by default - see the README's "hooks and CircleCI-native
+      equivalents" section for why, and add them here explicitly if you need them.
+  label:
+    type: string
+    default: "Running Buildkite plugin hooks"
+    description: >
+      The CircleCI step name for this command's `run:` step - override it (e.g. to the
+      plugin's own name) to tell this step apart from another invocation of run-hooks
+      later in the same job, such as when chaining more than one plugin. Mirrors a
+      Buildkite step's own `label:`, which has no other equivalent on this orb's steps.
   command:
     type: string
     default: ""
@@ -32,7 +41,7 @@ parameters:
 
 steps:
   - run:
-      name: Running Buildkite plugin hooks
+      name: << parameters.label >>
       environment:
         ORB_VAL_HOOKS: << parameters.hooks >>
         ORB_VAL_COMMAND: << parameters.command >>

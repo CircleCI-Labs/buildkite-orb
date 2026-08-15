@@ -25,7 +25,7 @@ usage:
               session-tags:
                 - organization_slug
                 - pipeline_slug
-            hooks: "pre-command,command,pre-exit"
+            hooks: "environment,pre-command,command,pre-exit"
             command: "aws sts get-caller-identity"
             before-steps:
               - run:

@@ -127,7 +127,9 @@ base mapping, also passed through `circleci env subst`).
 `configure` reimplements Buildkite's own documented config-flattening convention
 (independently verified against real plugin configs and the hooks that read them -
 see the [Verified targets](#verified-targets) section), against a deliberately small
-subset of block-style YAML - scalars, sequences, and (arbitrarily nested) mappings. No flow-style
+subset of block-style YAML - scalars, sequences (including sequences of scalars AND
+sequences of mappings, e.g. a list of `- key: value` items, each flattened the same
+way a nested mapping would be), and (arbitrarily nested) mappings. No flow-style
 (`{a: b}`), multi-line scalars, anchors/aliases, or same-line trailing `#` comments.
 Every real config in the vault-secrets, aws-assume-role-with-web-identity and trivy
 plugins' own READMEs (this orb's verified targets) parses correctly with this subset -
@@ -171,6 +173,11 @@ own process:
 `environment` → `pre-checkout` → `checkout` → `post-checkout` → `pre-command` →
 `command` → `post-command` → `pre-artifact` → `post-artifact` → `pre-exit`
 
+The `hooks` parameter is a **filter, not a sequence** - it only controls *which* of
+these hook names run; the order you list them in that comma-separated string is
+cosmetic and never affects execution order, which is always the fixed lifecycle order
+above.
+
 By default it runs everything **except `checkout`, `pre-artifact` and `post-artifact`**
 - those three have a CircleCI-native equivalent good enough that overriding it needs a
 deliberate opt-in, via the `hooks` parameter:
@@ -197,6 +204,20 @@ failing beats a successful command; otherwise `post-command` failing beats the
 command's own exit code; otherwise the command's own exit code is final. `pre-exit`
 always runs if listed, regardless of any earlier failure - matching Buildkite's own
 unconditional cleanup phase.
+
+**`BUILDKITE_COMMAND_EXIT_STATUS`** is exported (into this shell and `$BASH_ENV`) as
+soon as the `command` phase finishes, matching real Buildkite - `post-command`,
+`pre-artifact`, `post-artifact` and `pre-exit` hooks (and any later native step) can
+read it to branch on whether the command itself succeeded, a standard pattern for
+coverage-upload/notification-style plugins.
+
+**Telling steps apart when chaining plugins:** every command/job's CircleCI step names
+are otherwise fixed strings (e.g. "Running Buildkite plugin hooks"), so calling
+`run-hooks`/`plugin` more than once in the same job (see
+["Layering and future multi-plugin chaining"](#layering-and-future-multi-plugin-chaining))
+produces identically-named steps in the job log. Set the `label` parameter (on
+`run-hooks`, `plugin`, or the `plugin` job) to override that step's name - the closest
+equivalent this orb has to a Buildkite step's own `label:`.
 
 **The `command` hook and the `command` parameter:** if the plugin defines
 `hooks/command`, it runs (and fully replaces the step's own command, exactly as in

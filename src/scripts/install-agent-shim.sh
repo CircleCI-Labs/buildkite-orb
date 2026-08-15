@@ -47,7 +47,16 @@ cmd_meta_data() {
       shift || true
       while [[ $# -gt 0 ]]; do
         case "$1" in
-          --default) default="${2:-}"; have_default=true; shift 2 ;;
+          --default)
+            default="${2:-}"
+            have_default=true
+            # `--default` as the very last token (no value after it) leaves only 1
+            # positional parameter - `shift 2` then fails and, critically, leaves the
+            # positional parameters UNCHANGED, so the `while [[ $# -gt 0 ]]` loop keeps
+            # re-matching this same `--default` forever. Fall back to `shift 1` so the
+            # loop always makes forward progress regardless of how many args remain.
+            if [[ $# -ge 2 ]]; then shift 2; else shift; fi
+            ;;
           *) shift ;;
         esac
       done
