@@ -101,6 +101,12 @@ case "${LOCATION}" in
         fi
 
         if [[ -n "${SUBDIR}" ]]; then
+            # UNVERIFIED ASSUMPTION: Buildkite's own docs never state whether the
+            # derived <NAME> for a subdirectory plugin ("repo.git/subdir#ref") comes
+            # from the subdirectory's own name or the outer repo's name - no real
+            # multi-plugin monorepo example was found to confirm either way. This uses
+            # the subdirectory name (the more specific, and so more plugin-identifying,
+            # of the two) - flag and fix this if a real example proves otherwise.
             RAW_NAME="${SUBDIR##*/}"
         else
             BASE_NAME="${REPO_URL##*/}"

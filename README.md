@@ -285,6 +285,12 @@ not invented - see [`src/examples/`](src/examples/).
   under `configuration`; real Buildkite validates config against it, but only when this
   flag is explicitly enabled (default `false` even on real Buildkite). This orb doesn't
   implement that validation at all, in v1.
+- **The derived `<NAME>` for a subdirectory plugin** (`repo.git/subdir#ref`) -
+  Buildkite's own docs never state whether this comes from the subdirectory's name or
+  the outer repo's name, and no real multi-plugin-monorepo example was found to confirm
+  either way. This orb uses the subdirectory's name (see the comment in
+  [`fetch-plugin.sh`](src/scripts/fetch-plugin.sh)); flag it if a real example proves
+  that wrong.
 - **Very old bash images** - `run-hooks`' environment-diffing relies on `export -p`
   rendering a value with embedded newlines or quotes as a single `$'...'`-quoted
   (ANSI-C) line, which every bash 4.x/5.x tested against (including `cimg/base`'s
