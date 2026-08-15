@@ -532,6 +532,15 @@ means this orb is a strictly higher-trust ask of you than the docker-sandboxed `
 `bitbucket` bridges: treat every plugin you point `plugin:` at the same way you'd treat a
 third-party dependency you added directly to your build.
 
+**No value this orb exports is ever masked in logs.** Whatever a hook writes into `$BASH_ENV`
+through the env-diff threading described in ["Hooks and their CircleCI-native equivalents"](#hooks-and-their-circleci-native-equivalents),
+and anything it stores via the `meta-data` shim, is exported verbatim and unredacted. CircleCI's
+own log masking only catches an **exact match** against a registered context or project secret --
+a value a plugin derived from a secret, a URL with credentials embedded in it, or a secret
+concatenated with other text is not something masking will catch. Since hooks run natively here
+with the whole job's environment available to them, treat every value a plugin sets as public log
+content, and don't rely on this orb or on CircleCI to hide it for you.
+
 ## Layering and future multi-plugin chaining
 
 Each command does one job and reads/writes plain environment variables and
