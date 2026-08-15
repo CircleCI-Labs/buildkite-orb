@@ -86,8 +86,9 @@ executor overrides.
    `$BASH_ENV`, so native CircleCI steps after this one see it too.
 6. **`plugin`** is the aggregate of all four - the one most users call directly, as
    either a command (inline among native steps) or a job (`buildkite/plugin`, callable
-   from a workflow, with `before-steps`/`after-steps` for interleaving and an automatic
-   `store_artifacts` for whatever the hooks staged via `buildkite-agent artifact upload`).
+   from a workflow, with CircleCI's own native `pre-steps`/`post-steps` available for
+   interleaving - see below - and an automatic `store_artifacts` for whatever the hooks
+   staged via `buildkite-agent artifact upload`).
 
 ## `CIRCLE_*` → `BUILDKITE_*` environment mapping
 
@@ -322,6 +323,53 @@ not invented - see [`src/examples/`](src/examples/).
 - **Multi-line YAML scalars, flow-style config, anchors/aliases, same-line trailing
   `#` comments** - see [Config flattening](#config-flattening).
 - **The `docker`/`docker-compose` plugins** - deliberately not a target; see above.
+- **No automatic `store_test_results` default.** Real Buildkite Test Engine/Analytics is
+  an HTTP API upload (`analytics-api.buildkite.com/v1/uploads`, OIDC- or token-authed),
+  performed by a plugin (the Tests plugin/bktec, or the Test Collector plugin) that
+  itself decides where its JUnit/JSON input lives - there's no fixed filesystem path any
+  Buildkite plugin is expected to write test output to, unlike artifacts (where this
+  orb's own agent-shim reimplementation gives it a real directory to default against -
+  see `store-artifacts` above). No local shim for the Test Analytics API exists in this
+  orb, so there's nothing to point a default at; add your own `store_test_results` step
+  (or `post-steps:` on the `plugin` job) if you know the specific plugin's own output path.
+
+## Interleaving native CircleCI steps around the plugin's hooks
+
+The `buildkite/plugin` **job** (only when invoked from a workflow's `jobs:` list, not the
+`plugin` **command** inside another job's own `steps:`) accepts CircleCI's own built-in
+`pre-steps`/`post-steps` arguments - available on every 2.1+ job, not something this orb
+declares. Pass them at the call site:
+
+```yaml
+- buildkite/plugin:
+    plugin: "equinixmetal-buildkite/trivy#v1.22.0"
+    pre-steps:
+      - run: echo "before checkout AND before the plugin's hooks"
+    post-steps:
+      - run: echo "after the plugin's hooks; their env diff is already in $BASH_ENV"
+```
+
+**One real platform caveat:** `pre-steps` run before **every** step in the job, including
+this job's own internal `checkout` - not just before the plugin's hooks. If a pre-step
+needs the repo checked out first, either do that checkout yourself inside the pre-step, or
+use `checkout: false` on the job plus an explicit `checkout` as the first entry of
+`pre-steps`:
+
+```yaml
+- buildkite/plugin:
+    plugin: "equinixmetal-buildkite/trivy#v1.22.0"
+    checkout: false
+    pre-steps:
+      - checkout
+      - run: echo "runs after checkout, still before the plugin's hooks"
+    post-steps:
+      - run: echo "after the plugin's hooks"
+```
+
+Need several native steps and several plugin invocations interleaved in a specific order
+within one job? Reach for the `fetch-plugin`/`configure`/`install-agent-shim`/`run-hooks`
+commands (or the aggregate `plugin` command) in a hand-rolled job instead - see
+[Layering and future multi-plugin chaining](#layering-and-future-multi-plugin-chaining).
 
 ## Layering and future multi-plugin chaining
 
@@ -358,6 +406,10 @@ point it at, exactly as cloning and running any other open-source shell script w
 ## How to Contribute
 
 We welcome [issues](https://github.com/CircleCI-Labs/buildkite-orb/issues) to and [pull requests](https://github.com/CircleCI-Labs/buildkite-orb/pulls) against this repository!
+
+**CircleCI CLI version floor: `>= 1.0.48254`.** Older CLI builds silently pack this orb's `<<include(...)>>` directives as literal text instead of expanding them, producing a broken orb that can still pass `circleci orb validate` -- a false green with no other symptom. Run `scripts/check-circleci-cli-version.sh` (also wired into `.circleci/config.yml`'s `lint-pack` workflow) before packing locally if you're not sure which build you have.
+
+**`pre-steps`/`post-steps` are reserved job-parameter names.** `circleci orb validate` rejects a job parameter literally named `pre-steps` or `post-steps` outright -- this only surfaces under `orb validate`, which needs a token, so a plain `circleci config validate`/pack will not catch it. If you're adding a new job parameter, don't pick either name.
 
 ## How to Publish An Update
 1. Merge pull requests with desired changes to the main branch.
