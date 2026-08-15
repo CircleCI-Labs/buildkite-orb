@@ -42,9 +42,15 @@ workflows:
           filters: *filters
           requires: [check-cli-version]
       # Ignore RC010 (deploy job/executor blocklist), same as act-orb.
+      # Ignore RC006: this repo is currently PRIVATE, and RC006's "Source URL should be
+      # valid" check is an UNAUTHENTICATED reachability probe against display.source_url --
+      # anonymous GitHub returns 404 for a private repo regardless of whether the URL is
+      # correct, so this fails even though src/@orb.yml's source_url genuinely is reachable
+      # by anyone with repo access. This exclusion MUST be removed once the repo goes public,
+      # at which point RC006 will pass on its own with no config change needed here.
       - orb-tools/review:
           filters: *filters
-          exclude: "RC010"
+          exclude: "RC010,RC006"
       - shellcheck/check:
           filters: *filters
           severity: error

@@ -35,8 +35,13 @@ jobs:
           name: Build two throwaway git repos from the bundled test fixture
           command: |
             set -euo pipefail
-            git config --global user.email "test@example.com"
-            git config --global user.name "orb test"
+            # Scoped to this step's own git invocations only -- never touch global/local
+            # git config (see this repo's contributor guidance: an earlier incident
+            # polluted commit history by setting `git config --global user.email` during
+            # testing). GIT_AUTHOR_*/GIT_COMMITTER_* env vars are the correct, unscoped-
+            # config way to give a throwaway fixture repo a commit identity.
+            export GIT_AUTHOR_NAME="orb test" GIT_AUTHOR_EMAIL="test@example.com"
+            export GIT_COMMITTER_NAME="orb test" GIT_COMMITTER_EMAIL="test@example.com"
 
             # A repo named "*-buildkite-plugin" - the common case.
             rm -rf /tmp/hello-buildkite-plugin
@@ -153,6 +158,294 @@ jobs:
             test -n "$TRIVY_EXE_PATH"
             echo "OK: TRIVY_VERSION=$TRIVY_VERSION threaded from pre-checkout, across post-command, into \$BASH_ENV"
 
+  # Gap-closing test: run-hooks.sh's 5-tier exit-code precedence table
+  # (buildkite.com/docs/agent/lifecycle#exit-codes) had zero direct coverage -- the
+  # bundled fixture only exercises the fully-successful path. Builds a small throwaway
+  # fixture plugin whose every hook is independently fail/succeed-controlled via env
+  # vars, and invokes run-hooks.sh directly (credential-free, no CircleCI job needs to
+  # go red) for each precedence case.
+  test_run_hooks_exit_precedence:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Build a fail/succeed-controllable fixture plugin
+          command: |
+            set -euo pipefail
+            plugin_dir=/tmp/precedence-plugin
+            mkdir -p "${plugin_dir}/hooks"
+            for hook in pre-command command post-command pre-artifact post-artifact pre-exit; do
+              upper="$(echo "${hook}" | tr '[:lower:]-' '[:upper:]_')"
+              cat > "${plugin_dir}/hooks/${hook}" \<<EOF
+            #!/bin/bash
+            touch "\${MARKER_DIR}/${hook}-ran"
+            exit "\${FAIL_${upper}:-0}"
+            EOF
+            done
+            chmod +x "${plugin_dir}"/hooks/*
+      - run:
+          name: "Case 1+3: a gate-phase failure (pre-command) skips command, but pre-exit still runs"
+          command: |
+            set -euo pipefail
+            export MARKER_DIR="$(mktemp -d)"
+            export FAIL_PRE_COMMAND=5
+            set +e
+            BUILDKITE_PLUGIN_ROOT=/tmp/precedence-plugin \
+              ORB_VAL_HOOKS="pre-command,command,post-command,pre-artifact,post-artifact,pre-exit" \
+              ORB_VAL_COMMAND="" ORB_VAL_WORKING_DIRECTORY="$(mktemp -d)" BASH_ENV="$(mktemp)" \
+              bash src/scripts/run-hooks.sh
+            actual=$?
+            set -e
+            [ "${actual}" -eq 5 ] || { echo "FAIL: expected final exit 5 (the gate failure's own code), got ${actual}" >&2; exit 1; }
+            [ -f "${MARKER_DIR}/pre-command-ran" ] || { echo "FAIL: pre-command should have run" >&2; exit 1; }
+            [ -f "${MARKER_DIR}/command-ran" ] && { echo "FAIL: command hook ran despite the earlier gate failure" >&2; exit 1; }
+            [ -f "${MARKER_DIR}/pre-exit-ran" ] || { echo "FAIL: pre-exit must always run, even after a gate failure" >&2; exit 1; }
+            echo "OK: gate failure won immediately (exit 5), command never ran, pre-exit still ran."
+      - run:
+          name: "Case 2: a failing post-command overrides a successful command"
+          command: |
+            set -euo pipefail
+            export MARKER_DIR="$(mktemp -d)"
+            unset FAIL_PRE_COMMAND
+            export FAIL_POST_COMMAND=6
+            set +e
+            BUILDKITE_PLUGIN_ROOT=/tmp/precedence-plugin \
+              ORB_VAL_HOOKS="pre-command,command,post-command,pre-artifact,post-artifact,pre-exit" \
+              ORB_VAL_COMMAND="" ORB_VAL_WORKING_DIRECTORY="$(mktemp -d)" BASH_ENV="$(mktemp)" \
+              bash src/scripts/run-hooks.sh
+            actual=$?
+            set -e
+            [ "${actual}" -eq 6 ] || { echo "FAIL: expected final exit 6 (post-command's own code), got ${actual}" >&2; exit 1; }
+            echo "OK: a failing post-command (6) overrode the command's own successful (0) exit code."
+      - run:
+          name: "Case 4a: a pre-artifact failure is DISCARDED when the command already failed"
+          command: |
+            set -euo pipefail
+            export MARKER_DIR="$(mktemp -d)"
+            unset FAIL_POST_COMMAND
+            export FAIL_COMMAND=7 FAIL_PRE_ARTIFACT=9
+            set +e
+            BUILDKITE_PLUGIN_ROOT=/tmp/precedence-plugin \
+              ORB_VAL_HOOKS="pre-command,command,post-command,pre-artifact,post-artifact,pre-exit" \
+              ORB_VAL_COMMAND="" ORB_VAL_WORKING_DIRECTORY="$(mktemp -d)" BASH_ENV="$(mktemp)" \
+              bash src/scripts/run-hooks.sh
+            actual=$?
+            set -e
+            [ "${actual}" -eq 7 ] || { echo "FAIL: expected final exit 7 (the command's own code; pre-artifact's 9 must be discarded), got ${actual}" >&2; exit 1; }
+            echo "OK: pre-artifact's failure (9) was correctly discarded in favor of the command's own failure (7)."
+      - run:
+          name: "Case 4b: a pre-artifact failure WINS when the command succeeded"
+          command: |
+            set -euo pipefail
+            export MARKER_DIR="$(mktemp -d)"
+            unset FAIL_COMMAND
+            export FAIL_PRE_ARTIFACT=9
+            set +e
+            BUILDKITE_PLUGIN_ROOT=/tmp/precedence-plugin \
+              ORB_VAL_HOOKS="pre-command,command,post-command,pre-artifact,post-artifact,pre-exit" \
+              ORB_VAL_COMMAND="" ORB_VAL_WORKING_DIRECTORY="$(mktemp -d)" BASH_ENV="$(mktemp)" \
+              bash src/scripts/run-hooks.sh
+            actual=$?
+            set -e
+            [ "${actual}" -eq 9 ] || { echo "FAIL: expected final exit 9 (pre-artifact's own code, since the command succeeded), got ${actual}" >&2; exit 1; }
+            echo "OK: pre-artifact's failure (9) correctly won over the command's own success (0)."
+      - run:
+          name: "Case 5: a failing pre-exit always overrides everything else, even a gate failure"
+          command: |
+            set -euo pipefail
+            export MARKER_DIR="$(mktemp -d)"
+            export FAIL_PRE_COMMAND=5 FAIL_PRE_EXIT=3
+            unset FAIL_PRE_ARTIFACT
+            set +e
+            BUILDKITE_PLUGIN_ROOT=/tmp/precedence-plugin \
+              ORB_VAL_HOOKS="pre-command,command,post-command,pre-artifact,post-artifact,pre-exit" \
+              ORB_VAL_COMMAND="" ORB_VAL_WORKING_DIRECTORY="$(mktemp -d)" BASH_ENV="$(mktemp)" \
+              bash src/scripts/run-hooks.sh
+            actual=$?
+            set -e
+            [ "${actual}" -eq 3 ] || { echo "FAIL: expected final exit 3 (pre-exit's own code, overriding the earlier gate failure), got ${actual}" >&2; exit 1; }
+            echo "OK: pre-exit's failure (3) overrode even the earlier gate failure (5)."
+
+  # Gap-closing test: configure.sh's config-flattening only had scalar/array/one-level-
+  # nested coverage -- never a hyphenated key (Buildkite's own real-world convention) or
+  # a genuinely empty config: (configure.sh's own documented clean no-op).
+  test_configure_hyphenated_and_empty_config:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: A hyphenated config key flattens to the same _-joined env var name as any other
+          command: |
+            set -euo pipefail
+            bash_env_file="$(mktemp)"
+            BASH_ENV="${bash_env_file}" \
+              BUILDKITE_PLUGIN_ENV_PREFIX="BUILDKITE_PLUGIN_TESTPLUGIN" \
+              ORB_VAL_CONFIG=$'role-arn: arn:aws:iam::123456789012:role/foo\nsession-duration: 900' \
+              bash src/scripts/configure.sh
+            grep -qx "export BUILDKITE_PLUGIN_TESTPLUGIN_ROLE_ARN=arn:aws:iam::123456789012:role/foo" "${bash_env_file}"
+            grep -qx "export BUILDKITE_PLUGIN_TESTPLUGIN_SESSION_DURATION=900" "${bash_env_file}"
+            echo "OK: hyphenated keys 'role-arn'/'session-duration' flattened correctly."
+      - run:
+          name: An empty config is a clean no-op
+          command: |
+            set -euo pipefail
+            bash_env_file="$(mktemp)"
+            output="$(BASH_ENV="${bash_env_file}" \
+              BUILDKITE_PLUGIN_ENV_PREFIX="BUILDKITE_PLUGIN_TESTPLUGIN" \
+              ORB_VAL_CONFIG="" \
+              bash src/scripts/configure.sh 2>&1)"
+            if [ -s "${bash_env_file}" ]; then
+              echo "FAIL: expected an empty config to write nothing to \$BASH_ENV, got:" >&2
+              cat "${bash_env_file}" >&2
+              exit 1
+            fi
+            case "${output}" in
+              *"nothing to flatten"*) ;;
+              *)
+                echo "FAIL: expected the 'nothing to flatten' message, got: ${output}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: an empty config is a clean no-op."
+
+  # Regression test: fetch-plugin.sh rejects a #ref starting with '-' (git-option-
+  # injection defense -- a ref like "--orphan=pwned" would otherwise be parsed by git as
+  # an option, not a ref).
+  test_fetch_plugin_ref_injection_regression:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Build a throwaway git fixture repo
+          command: |
+            set -euo pipefail
+            export GIT_AUTHOR_NAME="orb test" GIT_AUTHOR_EMAIL="test@example.com"
+            export GIT_COMMITTER_NAME="orb test" GIT_COMMITTER_EMAIL="test@example.com"
+            rm -rf /tmp/injection-repo
+            mkdir -p /tmp/injection-repo
+            echo placeholder > /tmp/injection-repo/f.txt
+            git -C /tmp/injection-repo init -q -b main
+            git -C /tmp/injection-repo add -A
+            git -C /tmp/injection-repo commit -q -m fixture
+      - run:
+          name: "Regression test - a ref starting with '-' is refused, never passed to git"
+          command: |
+            set +e
+            error_output="$(ORB_VAL_PLUGIN='file:///tmp/injection-repo#--orphan=pwned' \
+              ORB_VAL_PLUGIN_DIR="$(mktemp -d)" \
+              ORB_VAL_ALWAYS_CLONE_FRESH="true" \
+              BASH_ENV="$(mktemp)" \
+              bash src/scripts/fetch-plugin.sh 2>&1)"
+            actual_exit=$?
+            set -e
+            if [ "${actual_exit}" -eq 0 ]; then
+              echo "FAIL: expected fetch-plugin.sh to reject the hostile ref, but it exited 0" >&2
+              echo "${error_output}" >&2
+              exit 1
+            fi
+            case "${error_output}" in
+              *"is not a valid git ref"*) ;;
+              *)
+                echo "FAIL: expected the 'is not a valid git ref' error, got:" >&2
+                echo "${error_output}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: a ref starting with '-' was refused before ever reaching git."
+
+  # Regression test: fetch-plugin.sh canonicalizes and verifies a git-URL subdirectory
+  # plugin reference stays inside the clone (defends against
+  # "repo.git/../../etc#main" escaping to somewhere like /tmp/etc).
+  test_fetch_plugin_subdir_traversal_regression:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Build a throwaway git fixture repo, deliberately named "*.git"
+          command: |
+            set -euo pipefail
+            export GIT_AUTHOR_NAME="orb test" GIT_AUTHOR_EMAIL="test@example.com"
+            export GIT_COMMITTER_NAME="orb test" GIT_COMMITTER_EMAIL="test@example.com"
+            rm -rf /tmp/traversal-repo.git
+            mkdir -p /tmp/traversal-repo.git
+            echo placeholder > /tmp/traversal-repo.git/f.txt
+            git -C /tmp/traversal-repo.git init -q -b main
+            git -C /tmp/traversal-repo.git add -A
+            git -C /tmp/traversal-repo.git commit -q -m fixture
+      - run:
+          name: "Regression test - a subdirectory reference cannot escape the cloned repo"
+          command: |
+            set +e
+            error_output="$(ORB_VAL_PLUGIN='file:///tmp/traversal-repo.git/../../etc#main' \
+              ORB_VAL_PLUGIN_DIR="$(mktemp -d)" \
+              ORB_VAL_ALWAYS_CLONE_FRESH="true" \
+              BASH_ENV="$(mktemp)" \
+              bash src/scripts/fetch-plugin.sh 2>&1)"
+            actual_exit=$?
+            set -e
+            if [ "${actual_exit}" -eq 0 ]; then
+              echo "FAIL: expected fetch-plugin.sh to refuse the escaping subdirectory reference, but it exited 0" >&2
+              echo "${error_output}" >&2
+              exit 1
+            fi
+            case "${error_output}" in
+              *"outside the cloned plugin repository"*) ;;
+              *)
+                echo "FAIL: expected the 'outside the cloned plugin repository' error, got:" >&2
+                echo "${error_output}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: a subdirectory reference attempting to escape the cloned repo was refused."
+
+  # Gap-closing test: fetch-plugin.yml's own comment documents that plugin-dir is
+  # always cleared before a cache restore specifically to avoid staleness when two
+  # DIFFERENT plugins are fetched into the same default plugin-dir in one job -- no CI
+  # test proved that actually works end-to-end. Fetches two distinct local fixture
+  # plugins into the exact same plugin-dir, back to back.
+  test_fetch_plugin_idempotency:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Build two distinct throwaway git fixture repos
+          command: |
+            set -euo pipefail
+            export GIT_AUTHOR_NAME="orb test" GIT_AUTHOR_EMAIL="test@example.com"
+            export GIT_COMMITTER_NAME="orb test" GIT_COMMITTER_EMAIL="test@example.com"
+            for name in idempotency-repo-one idempotency-repo-two; do
+              rm -rf "/tmp/${name}"
+              mkdir -p "/tmp/${name}"
+              echo "${name}" > "/tmp/${name}/f.txt"
+              git -C "/tmp/${name}" init -q -b main
+              git -C "/tmp/${name}" add -A
+              git -C "/tmp/${name}" commit -q -m fixture
+            done
+      - buildkite/fetch-plugin:
+          plugin: "file:///tmp/idempotency-repo-one"
+          plugin-dir: /tmp/shared-plugin-dir
+      - run:
+          name: Assert the first fetch resolved correctly
+          command: |
+            set -euo pipefail
+            test "${BUILDKITE_PLUGIN_ENV_PREFIX}" = "BUILDKITE_PLUGIN_IDEMPOTENCY_REPO_ONE_GIT"
+            test -f "${BUILDKITE_PLUGIN_ROOT}/f.txt"
+      - buildkite/fetch-plugin:
+          plugin: "file:///tmp/idempotency-repo-two"
+          plugin-dir: /tmp/shared-plugin-dir
+      - run:
+          name: Assert the second fetch, into the SAME plugin-dir, did not reuse the first plugin's stale clone
+          command: |
+            set -euo pipefail
+            test "${BUILDKITE_PLUGIN_ENV_PREFIX}" = "BUILDKITE_PLUGIN_IDEMPOTENCY_REPO_TWO_GIT"
+            grep -qx "idempotency-repo-two" "${BUILDKITE_PLUGIN_ROOT}/f.txt"
+            echo "OK: fetching a second, different plugin into the same plugin-dir did not reuse the first plugin's stale clone."
+
 workflows:
   test-deploy:
     jobs:
@@ -184,6 +477,16 @@ workflows:
                   test -n "$TRIVY_VERSION"
                   echo "OK: post-steps saw TRIVY_VERSION=$TRIVY_VERSION"
           filters: *filters
+      - test_run_hooks_exit_precedence:
+          filters: *filters
+      - test_configure_hyphenated_and_empty_config:
+          filters: *filters
+      - test_fetch_plugin_ref_injection_regression:
+          filters: *filters
+      - test_fetch_plugin_subdir_traversal_regression:
+          filters: *filters
+      - test_fetch_plugin_idempotency:
+          filters: *filters
       # The orb must be re-packed for publishing, and saved to the workspace.
       - orb-tools/pack:
           filters: *filters
@@ -191,6 +494,11 @@ workflows:
             - "Testing resolution, config flattening and env-diff threading"
             - "Testing a real plugin (trivy, credential-free)"
             - "Testing the plugin job: executor override + native pre/post-steps"
+            - test_run_hooks_exit_precedence
+            - test_configure_hyphenated_and_empty_config
+            - test_fetch_plugin_ref_injection_regression
+            - test_fetch_plugin_subdir_traversal_regression
+            - test_fetch_plugin_idempotency
       - orb-tools/publish:
           name: "Publish Dev"
           orb_name: cci-labs/buildkite
