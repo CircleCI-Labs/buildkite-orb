@@ -1,0 +1,22 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "labels": ["chore", "renovate"],
+  "automerge": false,
+  "circleci": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "Group this orb family's own CircleCI orb-tools/shellcheck version bumps into one PR, rather than one PR per orb.",
+      "matchManagers": ["circleci"],
+      "matchPackageNames": ["circleci/orb-tools", "circleci/shellcheck"],
+      "groupName": "circleci orb-tools/shellcheck"
+    },
+    {
+      "description": "Group GitHub Actions workflow dependency bumps into one PR.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions dependencies"
+    }
+  ]
+}
