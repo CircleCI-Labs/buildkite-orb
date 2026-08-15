@@ -91,6 +91,12 @@ parameters:
     type: string
     default: v1
     description: Prefixes a string to all cache keys.
+  test-results-path:
+    type: string
+    default: ""
+    description: >
+      Opt-in only - see the `plugin` command's parameter of the same name. Left empty (the
+      default), no `store_test_results` step runs.
 
 executor: << parameters.executor >>
 
@@ -116,6 +122,7 @@ steps:
       always-clone-fresh: << parameters.always-clone-fresh >>
       working-directory: << parameters.working-directory >>
       cache-key-prefix: << parameters.cache-key-prefix >>
+      test-results-path: << parameters.test-results-path >>
   - when:
       condition:
         and:

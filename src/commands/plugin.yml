@@ -77,6 +77,16 @@ parameters:
     type: string
     default: v1
     description: Prefixes a string to all cache keys.
+  test-results-path:
+    type: string
+    default: ""
+    description: >
+      Opt-in only - Buildkite Test Analytics has no fixed, documented output path a plugin's
+      hooks write to (it's a separate, account-linked upload mechanism, not a directory
+      convention), so this stays opt-in rather than a default. If you know the specific
+      plugin's hooks write JUnit XML to a predictable path inside the checkout, set this to
+      that path and `store_test_results` runs against it after the hooks finish. Left empty
+      (the default), nothing runs.
 
 steps:
   - fetch-plugin:
@@ -104,3 +114,8 @@ steps:
       command: << parameters.command >>
       working-directory: << parameters.working-directory >>
       label: << parameters.label >>
+  - when:
+      condition: << parameters.test-results-path >>
+      steps:
+        - store_test_results:
+            path: << parameters.test-results-path >>

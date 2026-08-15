@@ -63,15 +63,25 @@ strip_quotes() {
 
 export_leaf() {
     # export_leaf PREFIX RAW_VALUE
+    #
+    # SECURITY: never echo ${value} to stdout/stderr here. `config:` is resolved through
+    # `circleci env subst` above BEFORE this function ever sees it, so a caller writing
+    # e.g. `token: $MY_VAULT_TOKEN` arrives here as the real, resolved secret - not the
+    # literal string "$MY_VAULT_TOKEN". CircleCI's log masking only redacts an EXACT match
+    # against a registered context/project env var; a Vault-fetched secret, a derived/
+    # base64'd value, or a token embedded inside a larger string all sail straight through
+    # unmasked if printed. Log the variable NAME only (matches the "names only, never
+    # values" pattern already used by harness-orb's map-env.sh and this orb's own
+    # install-agent-shim.sh), never the value.
     local name="$1" value quoted
     value="$(strip_quotes "$2")"
     if [[ "${value}" == "{"* || "${value}" == "["* ]]; then
-        echo "configure: WARNING: ${name} looks like flow-style YAML ('${value}') - this orb's config flattening only supports block-style YAML (see the README's 'Config flattening' section) and will export this value as one opaque, unparsed string rather than flattening it further. Rewrite this key as block-style if the plugin's hook expects it flattened." >&2
+        echo "configure: WARNING: ${name} looks like flow-style YAML - this orb's config flattening only supports block-style YAML (see the README's 'Config flattening' section) and will export this value as one opaque, unparsed string rather than flattening it further. Rewrite this key as block-style if the plugin's hook expects it flattened." >&2
     fi
     printf -v quoted '%q' "${value}"
     echo "export ${name}=${quoted}" >> "${BASH_ENV}"
     export "${name}=${value}"
-    echo "  ${name}=${value}"
+    echo "  ${name}"
 }
 
 # --- Tokenize into (indent, content) pairs, dropping blank lines and comments. ---

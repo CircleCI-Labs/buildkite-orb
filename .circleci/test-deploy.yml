@@ -310,6 +310,49 @@ jobs:
             esac
             echo "OK: an empty config is a clean no-op."
 
+  # Regression test (security review Finding #1, CRITICAL): configure.sh's export_leaf
+  # unconditionally echoed every resolved config value to the console, on every run, with no
+  # opt-out. `config:` is resolved through `circleci env subst` BEFORE export_leaf ever sees
+  # it, so a caller writing `token: $MY_VAULT_TOKEN` arrived here as the REAL, resolved secret
+  # - not the literal string "$MY_VAULT_TOKEN" - and got printed in full. Protection against
+  # real damage depended entirely on the value being an exact-match, CircleCI-registered
+  # context/project secret (which CircleCI's own log masking redacts); anything else (a
+  # Vault-fetched secret, a derived/base64 value, a token embedded in a larger string) leaked
+  # unmasked. Exercises the real script directly, with a value that is NOT itself a registered
+  # CircleCI secret (so this test's own signal isn't accidentally masked by CircleCI's own log
+  # redaction and give a false pass) - the value must never appear in stdout/stderr at all.
+  test_configure_secret_value_not_echoed_regression:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: "Regression test - a resolved config value is never echoed to the console"
+          command: |
+            set -euo pipefail
+            bash_env_file="$(mktemp)"
+            output="$(BASH_ENV="${bash_env_file}" \
+              BUILDKITE_PLUGIN_ENV_PREFIX="BUILDKITE_PLUGIN_TESTPLUGIN" \
+              ORB_VAL_CONFIG='auth-token: not-a-registered-circleci-secret-abc123' \
+              bash src/scripts/configure.sh 2>&1)"
+            echo "${output}"
+            case "${output}" in
+              *"not-a-registered-circleci-secret-abc123"*)
+                echo "FAIL: the resolved config value was echoed to the console" >&2
+                exit 1
+                ;;
+            esac
+            case "${output}" in
+              *"BUILDKITE_PLUGIN_TESTPLUGIN_AUTH_TOKEN"*) ;;
+              *)
+                echo "FAIL: expected the variable NAME to still be logged (names-only is the documented behavior), got:" >&2
+                echo "${output}" >&2
+                exit 1
+                ;;
+            esac
+            grep -qx "export BUILDKITE_PLUGIN_TESTPLUGIN_AUTH_TOKEN=not-a-registered-circleci-secret-abc123" "${bash_env_file}"
+            echo "OK: the resolved value was written to \$BASH_ENV for later steps to use, but never echoed to the console; only the variable name was logged."
+
   # Regression test: fetch-plugin.sh rejects a #ref starting with '-' (git-option-
   # injection defense -- a ref like "--orphan=pwned" would otherwise be parsed by git as
   # an option, not a ref).
@@ -402,6 +445,74 @@ jobs:
             esac
             echo "OK: a subdirectory reference attempting to escape the cloned repo was refused."
 
+  # Regression test (security review Finding #5, HIGH): fetch-plugin.sh's redact_userinfo
+  # only ever masked a credential at the very START of a string (anchored `^` in the sed
+  # pattern) - fine for the two deliberate "Resolved plugin reference"/"repo:" lines, which
+  # only ever hold a bare URL, but git's own fatal clone-error text embeds the URL MID-message
+  # ("fatal: could not read Password for 'https://TOKEN@host': Device not configured"), which
+  # the anchored pattern never matched at all. On top of that, the retry path's OWN full-clone
+  # attempt (a second `git clone` call) printed its stderr straight to the console with no
+  # redaction applied whatsoever - only the first attempt's captured stderr got the (broken)
+  # treatment. Fakes `git` on PATH to fail with exactly this real, observed failure shape (a
+  # git clone against a URL with userinfo, hitting a non-interactive password prompt) without
+  # any network dependency, and asserts the raw token appears nowhere in the output - from
+  # either clone attempt.
+  test_fetch_plugin_credential_leak_regression:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Build a fake `git` that fails clone with a credential-bearing fatal message
+          command: |
+            mkdir -p /tmp/fakegit
+            cat > /tmp/fakegit/git \<<'EOF'
+            #!/bin/bash
+            # Fake git: fails every clone with a credential-bearing fatal message, matching a
+            # real git binary's own "could not read Password" failure shape for a URL with
+            # embedded userinfo hitting a non-interactive password prompt.
+            if [[ "$1" == "clone" ]]; then
+                for arg in "$@"; do
+                    case "${arg}" in
+                        *://*@*)
+                            echo "fatal: could not read Password for '${arg}': Device not configured" >&2
+                            exit 128
+                            ;;
+                    esac
+                done
+                echo "fatal: could not read Password for 'unknown': Device not configured" >&2
+                exit 128
+            fi
+            exec /usr/bin/git "$@"
+            EOF
+            chmod +x /tmp/fakegit/git
+      - run:
+          name: "Regression test - the real token never appears in output, from either clone attempt"
+          command: |
+            set +e
+            output="$(PATH="/tmp/fakegit:${PATH}" \
+              ORB_VAL_PLUGIN='https://s3cr3t-tok3n@example.invalid/org/repo.git#some-branch' \
+              ORB_VAL_PLUGIN_DIR="$(mktemp -d)" \
+              ORB_VAL_ALWAYS_CLONE_FRESH="true" \
+              BASH_ENV="$(mktemp)" \
+              bash src/scripts/fetch-plugin.sh 2>&1)"
+            set -e
+            echo "${output}"
+            case "${output}" in
+              *"s3cr3t-tok3n"*)
+                echo "FAIL: the raw credential 's3cr3t-tok3n' leaked into the output" >&2
+                exit 1
+                ;;
+            esac
+            case "${output}" in
+              *"REDACTED"*) ;;
+              *)
+                echo "FAIL: expected the redaction marker to appear at least once, got no match" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: the credential was redacted on every occurrence, including the retry path's own clone attempt."
+
   # Gap-closing test: fetch-plugin.yml's own comment documents that plugin-dir is
   # always cleared before a cache restore specifically to avoid staleness when two
   # DIFFERENT plugins are fetched into the same default plugin-dir in one job -- no CI
@@ -477,6 +588,38 @@ jobs:
             # literal string "false", matching Buildkite's own documented value exactly.
             test "${BUILDKITE_PULL_REQUEST}" = "false"
             echo "OK: map-env's CIRCLE_* -> BUILDKITE_* mapping looks correct."
+
+  # New-feature test (limitations reassessment item #6): test-results-path is an opt-in
+  # parameter converting "Buildkite Test Analytics has no fixed output-path convention" into
+  # something a user can wire up deliberately, once they know their own plugin's JUnit XML
+  # output path. Writes a real JUnit XML fixture into the checkout, then proves the plugin
+  # itself still runs normally with the parameter set.
+  test_plugin_test_results_path:
+    executor: buildkite/docker
+    steps:
+      - checkout
+      - run:
+          name: Write a real JUnit XML fixture into the checkout
+          command: |
+            mkdir -p test-results-fixture
+            cat > test-results-fixture/results.xml \<<'XML'
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuite name="fixture" tests="1" failures="0">
+              <testcase classname="fixture" name="passes"/>
+            </testsuite>
+            XML
+      - buildkite/plugin:
+          plugin: "equinixmetal-buildkite/trivy#v1.22.0"
+          config: |
+            exit-code: 0
+          command: "echo scanning-repository"
+          test-results-path: test-results-fixture
+      - run:
+          name: Assert the plugin itself still ran normally with test-results-path set
+          command: |
+            set -euo pipefail
+            test -n "$TRIVY_VERSION"
+            echo "OK: test-results-path did not interfere with the plugin's own run/output threading."
 
   # Regression test for the reserved-shell-variable-name denylist added to
   # map-env.sh's extra-env handling in this pass (see that script's own comment) --
@@ -574,6 +717,12 @@ workflows:
           filters: *filters
       - test_fetch_plugin_idempotency:
           filters: *filters
+      - test_fetch_plugin_credential_leak_regression:
+          filters: *filters
+      - test_configure_secret_value_not_echoed_regression:
+          filters: *filters
+      - test_plugin_test_results_path:
+          filters: *filters
       - map_env_isolation:
           filters: *filters
       - test_map_env_extra_env_reserved_name_regression:
@@ -591,6 +740,9 @@ workflows:
             - test_fetch_plugin_ref_injection_regression
             - test_fetch_plugin_subdir_traversal_regression
             - test_fetch_plugin_idempotency
+            - test_fetch_plugin_credential_leak_regression
+            - test_configure_secret_value_not_echoed_regression
+            - test_plugin_test_results_path
             - map_env_isolation
             - test_map_env_extra_env_reserved_name_regression
       - orb-tools/publish:

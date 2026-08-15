@@ -1,0 +1,18 @@
+description: >
+  Opt into `store_test_results` for a plugin whose own JUnit XML output path you know. Real
+  Buildkite Test Analytics has no fixed, documented output path any plugin is expected to write
+  to (it's a separate, account-linked HTTP upload, not a directory convention), so this is
+  deliberately opt-in rather than on-by-default.
+
+usage:
+  version: 2.1
+  orbs:
+    buildkite: cci-labs/buildkite@x.y.z
+  workflows:
+    test:
+      jobs:
+        - buildkite/plugin:
+            plugin: "some-org/my-test-runner-buildkite-plugin#v1.0.0"
+            config: |
+              junit-output: test-results
+            test-results-path: test-results

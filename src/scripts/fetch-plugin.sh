@@ -46,11 +46,15 @@ else
     echo "fetch-plugin: 'circleci' CLI not found on PATH - using the plugin reference as-is, without \$VAR substitution." >&2
 fi
 
-# redact_userinfo URL - masks a "user:pass@" (or "user@") prefix before a build log ever
-# sees it, so a credential embedded directly in a plugin git URL isn't echoed in plain
-# text below.
+# redact_userinfo TEXT - masks every "user:pass@" (or "user@") URL-userinfo prefix in TEXT
+# before a build log ever sees it, so a credential embedded directly in a plugin git URL isn't
+# echoed in plain text. Deliberately NOT anchored to the start of the string (no `^`) and
+# global (`g`): the two original call sites only ever passed a bare URL, where an anchored,
+# single-match pattern was enough, but git's own fatal clone-error text embeds the URL
+# mid-message (and sometimes more than once) - see the retry path below, where this same
+# function is applied to a real `git clone` stderr capture, not just a bare URL string.
 redact_userinfo() {
-    printf '%s' "$1" | sed -E 's#^([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@]+@#\1***REDACTED***@#'
+    printf '%s' "$1" | sed -E 's#([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@[:space:]]+@#\1***REDACTED***@#g'
 }
 
 format_env_key() {
@@ -171,9 +175,21 @@ else
     if [[ -n "${REF}" ]]; then
         if ! git clone --quiet --depth 1 --branch "${REF}" "${REPO_URL}" "${CLONE_TARGET}" 2> /tmp/.bk-clone-err.log; then
             echo "Shallow clone by ref '${REF}' didn't work (it may be a commit SHA rather than a branch or tag) - retrying with a full clone."
-            cat /tmp/.bk-clone-err.log >&2 || true
+            # git's own fatal message routinely echoes the URL it was cloning verbatim - for
+            # the documented private-repo pattern (https://oauth2:$TOKEN@host/...) that means
+            # the credential itself, in plain text, on a real auth failure/wrong ref/transient
+            # network error (routine, not exotic). Redact it the same way the two deliberate
+            # "Resolved plugin reference"/"repo:" lines above already are, before printing.
+            redact_userinfo "$(cat /tmp/.bk-clone-err.log)" >&2 || true
             rm -rf "${CLONE_TARGET}"
-            git clone --quiet "${REPO_URL}" "${CLONE_TARGET}"
+            # The retry's own full clone can fail too (same credential, same server, most
+            # likely the same auth failure) - its stderr needs the identical redaction
+            # treatment, not just the first attempt's. Captured and redacted the same way,
+            # rather than let git print directly to this step's stderr unredacted.
+            if ! git clone --quiet "${REPO_URL}" "${CLONE_TARGET}" 2> /tmp/.bk-clone-err.log; then
+                redact_userinfo "$(cat /tmp/.bk-clone-err.log)" >&2 || true
+                exit 1
+            fi
             git -C "${CLONE_TARGET}" checkout --quiet "${REF}"
         fi
     else

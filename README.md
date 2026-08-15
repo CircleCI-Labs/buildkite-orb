@@ -8,7 +8,7 @@ Run **one [Buildkite plugin](https://buildkite.com/docs/pipelines/integrations/p
 CircleCI Labs, including this repo, is a collection of solutions developed by members of CircleCI's field engineering teams through our engagement with various customer needs.
 
 -   ✅ Created by engineers @ CircleCI
--   ✅ Used by real CircleCI customers
+-   ⚠️ **Not yet used by production CircleCI customers.** This orb is currently dev-published only. What *is* verified: `equinixmetal-buildkite/trivy` (a real vulnerability scanner, fully credential-free) runs green end-to-end in this repo's own CI -- fetch, configure, run hooks, cross-hook env threading, into a real scan. See ["Verified targets"](#verified-targets) below for exactly what is and isn't proven among this orb's three named targets.
 -   ❌ **not** officially supported by CircleCI support
 
 ---
@@ -98,6 +98,7 @@ flowchart TD
     D --> E["configure<br/>flatten config: -&gt; BUILDKITE_PLUGIN_&lt;NAME&gt;_* <br/>circleci env subst resolves $SECRETS"]
     E --> F["run-hooks<br/>each hook its OWN process, fixed lifecycle order<br/>env-diff threaded forward between hooks + into $BASH_ENV"]
     F --> G[store_artifacts<br/>shim's artifact-dir]
+    F -.->|"test-results-path set (opt-in)"| H[store_test_results]
 
     style C fill:#4a4a8a,color:#fff
     style F fill:#4a4a8a,color:#fff
@@ -386,24 +387,34 @@ targets (see below). Nothing stops you from pointing `plugin:` at either of them
 yourself - they're ordinary git repos like any other plugin - just don't expect a
 better outcome than writing the equivalent native CircleCI Docker step directly.
 
-## Verified targets
+## Verified targets -- and what "verified" means for each
 
-Config shapes below are taken directly from each plugin's own `plugin.yml` and README,
-not invented - see [`src/examples/`](src/examples/).
+Config shapes below are taken directly from each plugin's own `plugin.yml` and README, not
+invented - see [`src/examples/`](src/examples/). **"Verified" is not one uniform claim across
+all three** -- only one of them is actually fetched, configured, and run in this orb's own CI;
+the other two are config-shape-verified only, and one of those is documented as never running
+at all against this orb as written:
 
+- **[`equinixmetal-buildkite/trivy`](https://github.com/equinixmetal-buildkite/trivy-buildkite-plugin)**
+  (`equinixmetal-buildkite/trivy#v1.22.0`) - Trivy vulnerability scanning. **Actually run, green,
+  credential-free, end-to-end**, in this orb's own CI: fetch, configure, cross-hook env
+  threading, a real scan - it downloads its own scanner binary and scans the checked-out
+  filesystem, needing nothing else. See [`.circleci/test-deploy.yml`](.circleci/test-deploy.yml).
+  This is the one target this README's claims are fully backed by a real, credential-free CI
+  run.
 - **[`vault-secrets`](https://github.com/buildkite-plugins/vault-secrets-buildkite-plugin)**
   (`vault-secrets#v2.4.2`) - type-aware HashiCorp Vault secret injection (plain env vars,
-  `ssh-agent` for SSH keys, `git-credential.helper` for git credentials). Needs a real
-  Vault server.
+  `ssh-agent` for SSH keys, `git-credential.helper` for git credentials). **Fetch-only, never
+  configured or run in CI**: it needs a real Vault server this repo doesn't have. The `fetch-plugin`
+  step (resolving the reference, cloning the real plugin repo) is exercised in CI; its hooks
+  are not.
 - **[`aws-assume-role-with-web-identity`](https://github.com/buildkite-plugins/aws-assume-role-with-web-identity-buildkite-plugin)**
-  (`aws-assume-role-with-web-identity#v1.7.0`) - OIDC-based AWS IAM role assumption. Its
-  `environment` hook calls `buildkite-agent oidc`, which this shim hard-fails on - see
-  [`src/examples/aws_assume_role_oidc.yml`](src/examples/aws_assume_role_oidc.yml) for
-  how to rewire it onto CircleCI's own OIDC tokens instead.
-- **[`equinixmetal-buildkite/trivy`](https://github.com/equinixmetal-buildkite/trivy-buildkite-plugin)**
-  (`equinixmetal-buildkite/trivy#v1.22.0`) - Trivy vulnerability scanning. **Credential-free**
-  - it downloads its own scanner binary and scans the checked-out filesystem - which is
-  why this is also the orb's own CI test (see [`.circleci/test-deploy.yml`](.circleci/test-deploy.yml)).
+  (`aws-assume-role-with-web-identity#v1.7.0`) - OIDC-based AWS IAM role assumption. **Never run
+  at all, and documented as hard-failing as written**: its `environment` hook calls
+  `buildkite-agent oidc`, which this shim hard-fails on by design (see the subcommand table
+  above) - see [`src/examples/aws_assume_role_oidc.yml`](src/examples/aws_assume_role_oidc.yml)
+  for the rework needed to rewire it onto CircleCI's own OIDC tokens instead. Listed here as a
+  documented config-shape reference and a known gap, not a working target.
 
 ## Limits
 
@@ -440,15 +451,17 @@ not invented - see [`src/examples/`](src/examples/).
 - **Multi-line YAML scalars, flow-style config, anchors/aliases, same-line trailing
   `#` comments** - see [Config flattening](#config-flattening).
 - **The `docker`/`docker-compose` plugins** - deliberately not a target; see above.
-- **No automatic `store_test_results` default.** Real Buildkite Test Engine/Analytics is
-  an HTTP API upload (`analytics-api.buildkite.com/v1/uploads`, OIDC- or token-authed),
-  performed by a plugin (the Tests plugin/bktec, or the Test Collector plugin) that
-  itself decides where its JUnit/JSON input lives - there's no fixed filesystem path any
-  Buildkite plugin is expected to write test output to, unlike artifacts (where this
-  orb's own agent-shim reimplementation gives it a real directory to default against -
-  see `store-artifacts` above). No local shim for the Test Analytics API exists in this
-  orb, so there's nothing to point a default at; add your own `store_test_results` step
-  (or `post-steps:` on the `plugin` job) if you know the specific plugin's own output path.
+- **No automatic `store_test_results` default -- but an explicit opt-in exists.** Real
+  Buildkite Test Engine/Analytics is an HTTP API upload
+  (`analytics-api.buildkite.com/v1/uploads`, OIDC- or token-authed), performed by a plugin (the
+  Tests plugin/bktec, or the Test Collector plugin) that itself decides where its JUnit/JSON
+  input lives - there's no fixed filesystem path any Buildkite plugin is expected to write test
+  output to, unlike artifacts (where this orb's own agent-shim reimplementation gives it a real
+  directory to default against - see `store-artifacts` above). No local shim for the Test
+  Analytics API exists in this orb, so there's still no *default* path to point at -- but once
+  *you* know your specific plugin's own JUnit XML output path, set `test-results-path` on
+  `plugin` (command or job) and `store_test_results` runs against it after the hooks finish.
+  Left empty (the default), nothing runs.
 
 ## Interleaving native CircleCI steps around the plugin's hooks
 
@@ -487,6 +500,37 @@ Need several native steps and several plugin invocations interleaved in a specif
 within one job? Reach for the `fetch-plugin`/`configure`/`install-agent-shim`/`run-hooks`
 commands (or the aggregate `plugin` command) in a hand-rolled job instead - see
 [Layering and future multi-plugin chaining](#layering-and-future-multi-plugin-chaining).
+
+## Passing data across jobs
+
+Both cross-job mechanisms already named in the subcommand table above (`meta-data`, this-job-
+only; `artifact download`, same-job only) are job-scoped, matching real Buildkite's own agent
+model less than they might first appear. Two real, native CircleCI mechanisms cover the "I need
+this value in a later job" case without any orb change:
+
+- **Passing a value to a downstream job**: after the hooks run, write the value you need to a
+  file and `persist_to_workspace` it, then `attach_workspace` in the downstream job and read the
+  file with a plain `run` step.
+- **Branching which jobs run based on an upstream job's output** (a genuine workflow-level
+  conditional): CircleCI has no native construct for this. The closest real mechanism is a setup
+  workflow plus the
+  [`circleci/continuation`](https://circleci.com/developer/orbs/orb/circleci/continuation) orb,
+  where an early job computes a value and calls `continuation/continue` with a config whose
+  `workflows:` block is shaped by that value.
+
+## Trust model: native execution, no container boundary
+
+Unlike the sibling `harness`/`bitbucket` orbs (which run a vendor's Docker image, with whatever
+sandboxing a plain container gives you), a Buildkite plugin's hooks run **directly in the job's
+own shell/process** on the `docker`/`machine`/`docker-toolchains` executor you chose -- there is
+no container boundary between the plugin's code and the rest of the job at all. A plugin's hook
+has everything the job has: the full checkout, every sourced context/project secret, network
+access, and on the `machine` executor, the Docker socket and host filesystem outright. This is
+inherent to how Buildkite plugins work (the real `buildkite-agent` runs them the same way, as
+bare host processes) -- it is not a gap this orb could close even if it wanted to -- but it
+means this orb is a strictly higher-trust ask of you than the docker-sandboxed `harness`/
+`bitbucket` bridges: treat every plugin you point `plugin:` at the same way you'd treat a
+third-party dependency you added directly to your build.
 
 ## Layering and future multi-plugin chaining
 
@@ -552,6 +596,7 @@ steps interleaved between individual stages -- e.g. inspecting the flattened
 | `always-clone-fresh` | boolean | `false` | Force a fresh clone even if a cache/prior clone exists (mirrors Buildkite's `BUILDKITE_PLUGINS_ALWAYS_CLONE_FRESH`). |
 | `working-directory` | string | `.` | Directory hooks start running from (Buildkite's `BUILDKITE_BUILD_CHECKOUT_PATH` equivalent). |
 | `cache-key-prefix` | string | `v1` | Prefix applied to every cache key this orb writes. |
+| `test-results-path` | string | `""` | Opt-in only. When set, runs `store_test_results` against this path after the hooks finish. Left empty (the default), nothing runs -- there's no vendor-wide default path to fall back to. |
 
 Individual commands (`fetch-plugin`, `map-env`, `install-agent-shim`, `configure`, `run-hooks`)
 expose the matching subset of these parameters under the same names -- see each command's own
