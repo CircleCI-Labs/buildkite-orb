@@ -220,14 +220,10 @@ Three executors, all opt-in (no default plugin-independent choice is forced on y
 
 `buildkite/docker-toolchains` wraps Buildkite's own `agent-base` image
 (`github.com/buildkite/agent-base-images`, MIT-licensed, rebuilt **daily**, amd64+arm64),
-pulled from ECR Public specifically to dodge Docker Hub's anonymous-pull rate limit. This
-was the one clean win identified while researching vendor convenience images across all
-four `cci-labs` ecosystem-bridge orbs: unlike the sibling `harness`/`bitbucket` orbs
-(where every plugin/pipe is already its own purpose-built image) and unlike `bitrise`
-(where the only public vendor image is a multi-year-stale snapshot), Buildkite's own
-base image is current, permissively licensed, and genuinely fills the gap `fetch-plugin`
-already warns about. **One real trap in Buildkite's own docs, found while researching
-this:** their docs (`buildkite.com/docs/agent/buildkite-hosted/linux/custom-agent-images`)
+pulled from ECR Public specifically to dodge Docker Hub's anonymous-pull rate limit -- see
+[`docs/ROADMAP.md`](docs/ROADMAP.md)'s "Vendor-image layering" for why this is the one sibling
+orb that adopts a vendor convenience image at all. **One real trap in Buildkite's own docs, found
+while researching this:** their docs (`buildkite.com/docs/agent/buildkite-hosted/linux/custom-agent-images`)
 point at `buildkite/hosted-agent-base`, a *different*, stale image (unmaintained for over
 a year as of this writing) - the actively-maintained successor this orb actually uses is
 `buildkite/agent-base` from a different GitHub repo. Don't follow that specific link in
@@ -284,8 +280,8 @@ plugin repos and checking their derived prefix against what their own hooks read
 
 **Not implemented:** `BUILDKITE_PLUGIN_CONFIGURATION` (the whole config as one JSON
 string) and `BUILDKITE_PLUGIN_VALIDATION`-gated schema validation against `plugin.yml`'s
-`configuration` JSON Schema. None of this orb's three verified target plugins' hooks
-read either of these - see ["Limits"](#limits).
+`configuration` JSON Schema -- see ["Limits"](#limits) and
+[`docs/ROADMAP.md`](docs/ROADMAP.md) item 2.
 
 ## Hooks and their CircleCI-native equivalents
 
@@ -318,6 +314,19 @@ deliberate opt-in, via the `hooks` parameter:
   `pre-artifact`/`post-artifact` to `hooks` explicitly and wire your own
   `store_artifacts` (or use the `plugin` job's automatic one, over the shim's artifact
   directory) if a plugin's artifact hooks matter to you.
+
+### Defaults that deviate from real `buildkite-agent`
+
+This orb intentionally overrides one default from real Buildkite's own hook lifecycle:
+
+| Parameter | Real `buildkite-agent`'s own default | This orb's default | Why |
+|---|---|---|---|
+| `hooks` | Runs **every** hook file present in the plugin's `hooks/` directory, unconditionally, in the fixed lifecycle order documented at [`buildkite.com/docs/agent/hooks`](https://buildkite.com/docs/agent/hooks). | `environment,pre-checkout,post-checkout,pre-command,command,post-command,pre-exit` -- filters out `checkout`, `pre-artifact`, `post-artifact` by default. | The three filtered-out hooks each already have a CircleCI-native equivalent good enough that overriding it needs a deliberate opt-in -- see the bullets above. |
+
+Every other default in this orb (`always-clone-fresh: false`, `plugin-cache: true`, an empty
+`test-results-path`) matches Buildkite's own documented default (`BUILDKITE_PLUGINS_ALWAYS_CLONE_FRESH`
+defaults to `false` on real Buildkite too; real Buildkite has no fixed Test Analytics path to
+default against either -- see "Limits" below) rather than deviating from it.
 
 **Exit-code precedence** is mirrored exactly from Buildkite's own documented lifecycle:
 a `pre-command`-or-earlier hook failing wins immediately (`command` never runs);
@@ -377,18 +386,12 @@ explaining why, pointing back here.
 
 ## `docker`/`docker-compose` plugins are deliberately not a target
 
-They're among the highest-usage plugins in the whole Buildkite ecosystem - but only
-because Buildkite agents are bare host processes with **no built-in container
-isolation**, so those two plugins are Buildkite users' only route to containerized
-builds. CircleCI already has this natively (the Docker executor, `machine` with remote
-Docker, and the mature `circleci/docker`/`circleci/aws-ecr` orbs) - wrapping them here
-would be parity with zero new capability for a CircleCI customer. The one place they'd
-carry real value is pure migration parity (not having to hand-translate a
-`docker-compose#v5.11.0` step's exact flags on day one of a migration) - a real but
-narrow use case, deprioritized against the vendor-integration gaps this orb actually
-targets (see below). Nothing stops you from pointing `plugin:` at either of them
-yourself - they're ordinary git repos like any other plugin - just don't expect a
-better outcome than writing the equivalent native CircleCI Docker step directly.
+They're among the highest-usage plugins in the whole Buildkite ecosystem, but CircleCI already
+has native container support with zero new capability gained by wrapping them here -- see
+[`docs/ROADMAP.md`](docs/ROADMAP.md) item 1 for the full reasoning. Nothing stops you from
+pointing `plugin:` at either of them yourself - they're ordinary git repos like any other plugin -
+just don't expect a better outcome than writing the equivalent native CircleCI Docker step
+directly.
 
 ## Verified targets -- and what "verified" means for each
 
@@ -531,7 +534,8 @@ this value in a later job" case without any orb change:
   workflow plus the
   [`circleci/continuation`](https://circleci.com/developer/orbs/orb/circleci/continuation) orb,
   where an early job computes a value and calls `continuation/continue` with a config whose
-  `workflows:` block is shaped by that value.
+  `workflows:` block is shaped by that value. See [`docs/ROADMAP.md`](docs/ROADMAP.md)'s
+  "Workspace / parallelism fit" for why this wasn't built as an orb feature.
 
 ## Trust model: native execution, no container boundary
 
@@ -558,14 +562,12 @@ content, and don't rely on this orb or on CircleCI to hide it for you.
 
 ## Layering and future multi-plugin chaining
 
-Each command does one job and reads/writes plain environment variables and
-`$BASH_ENV` - `fetch-plugin` sets `BUILDKITE_PLUGIN_ROOT`/`BUILDKITE_PLUGIN_ENV_PREFIX`,
-`configure` reads the latter, `run-hooks` reads the former. Nothing is baked into a
-single monolithic script. Calling `fetch-plugin` → `configure` → `run-hooks` more than
-once in the same job (with a different `plugin-dir` each time to avoid colliding
-clones) approximates chaining several plugins' hooks today; a `cci-labs/ci-bridge`-style
-shared orb, if one exists later, could formalize that into its own command without a
-breaking change here.
+Each command does one job and reads/writes plain environment variables and `$BASH_ENV`, with
+nothing baked into a single monolithic script. Calling `fetch-plugin` -> `configure` -> `run-hooks`
+more than once in the same job (with a different `plugin-dir` each time to avoid colliding clones)
+approximates chaining several plugins' hooks today. See [`docs/ROADMAP.md`](docs/ROADMAP.md)'s
+"Command-split decisions" for the full mechanism and item 3 for why a more formal chaining command
+isn't built yet.
 
 ## Legal / compliance
 
@@ -666,7 +668,7 @@ workflows:
 
 ## How to Contribute
 
-We welcome [issues](https://github.com/CircleCI-Labs/buildkite-orb/issues) to and [pull requests](https://github.com/CircleCI-Labs/buildkite-orb/pulls) against this repository!
+We welcome [issues](https://github.com/CircleCI-Labs/buildkite-orb/issues) to and [pull requests](https://github.com/CircleCI-Labs/buildkite-orb/pulls) against this repository! See [`docs/ROADMAP.md`](docs/ROADMAP.md) for items deliberately scoped out of past passes, with the reasoning recorded rather than lost.
 
 **CircleCI CLI version floor: `>= 1.0.48254`.** Older CLI builds silently pack this orb's `<<include(...)>>` directives as literal text instead of expanding them, producing a broken orb that can still pass `circleci orb validate` -- a false green with no other symptom. Run `scripts/check-circleci-cli-version.sh` (also wired into `.circleci/config.yml`'s `lint-pack` workflow) before packing locally if you're not sure which build you have.
 
