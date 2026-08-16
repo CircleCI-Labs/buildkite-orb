@@ -152,7 +152,7 @@ echo "  subdir: ${SUBDIR:-<none>}"
 echo "  env prefix: ${ENV_PREFIX}_"
 
 if [[ -z "${REF}" ]]; then
-    echo "WARNING: no #ref pinned on this plugin reference. Buildkite recommends always pinning to a tag or commit SHA to avoid unexpected changes and stale checkouts." >&2
+    echo "WARNING: no #ref pinned on this plugin reference. The plugin-clone cache key is this reference string itself, with no fallback key and nothing to naturally expire it - so an unpinned reference (a mutable branch, or no ref at all) is NEVER served from that cache: this run, and every run after it, re-clones fresh regardless of plugin-cache. That's deliberate - once cached, an unpinned ref's checkout would otherwise stay pinned forever to whatever commit happened to be at the tip on the FIRST run, which is worse than never caching it at all. Pin a tag or commit SHA (Buildkite's own recommendation) to get a reproducible build AND make plugin-cache actually cache this plugin." >&2
 fi
 
 mkdir -p "${PLUGIN_DIR}"
@@ -165,12 +165,25 @@ RESOLVED_REF_FILE="${PLUGIN_DIR}/_resolved_ref"
 # plugin-dir previously held a *different* plugin (most likely: a job called
 # fetch-plugin more than once against the same default plugin-dir), always-clone-fresh
 # alone wouldn't catch that - so re-clone whenever the resolved reference differs, too.
+#
+# An UNPINNED reference (empty REF) is additionally never reused, even when the
+# resolved reference matches exactly and a clone is sitting right there on disk
+# (most likely restored by the `fetch-plugin.yml`-level restore_cache step, since the
+# cache key is this same PLUGIN_REF string). That cached/restored checkout is exactly
+# the "pinned forever to whatever the tip happened to be on first run" content the
+# warning above describes - trusting it here would be the staleness bug, not a
+# performance shortcut. So it's always discarded and re-cloned, loudly, rather than
+# silently reused just because the on-disk bookkeeping happens to check out.
 if [[ -d "${CLONE_TARGET}/.git" ]] &&
     [[ "${ALWAYS_CLONE_FRESH}" != "true" && "${ALWAYS_CLONE_FRESH}" != "1" ]] &&
+    [[ -n "${REF}" ]] &&
     [[ -f "${RESOLVED_REF_FILE}" ]] &&
     [[ "$(cat "${RESOLVED_REF_FILE}")" == "${PLUGIN_REF}" ]]; then
     echo "Using cached/existing clone at ${CLONE_TARGET}"
 else
+    if [[ -d "${CLONE_TARGET}/.git" && -z "${REF}" ]]; then
+        echo "Discarding the cached/existing clone at ${CLONE_TARGET}: no #ref is pinned, so it can never be trusted to still match the branch tip - re-cloning fresh instead of reusing it."
+    fi
     rm -rf "${CLONE_TARGET}"
     if [[ -n "${REF}" ]]; then
         if ! git clone --quiet --depth 1 --branch "${REF}" "${REPO_URL}" "${CLONE_TARGET}" 2> /tmp/.bk-clone-err.log; then

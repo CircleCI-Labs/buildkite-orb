@@ -557,6 +557,133 @@ jobs:
             grep -qx "idempotency-repo-two" "${BUILDKITE_PLUGIN_ROOT}/f.txt"
             echo "OK: fetching a second, different plugin into the same plugin-dir did not reuse the first plugin's stale clone."
 
+  # Regression test, per the cache-staleness audit: fetch-plugin.yml's cache key is
+  # the plugin reference string itself, with no fallback key. That's fine for a
+  # PINNED reference (#tag/#sha) - the key can never go stale, because the reference
+  # itself never changes meaning. But for an UNPINNED reference (a mutable branch, or
+  # no #ref at all) the key is just as stable even though the branch tip it names
+  # keeps moving - so a naive "trust the cache whenever the resolved reference
+  # matches" rule would cache the clone ONCE and reuse it forever, permanently
+  # pinning every future run to whatever commit happened to be at the tip on the
+  # very first run. Proves both branches directly against fetch-plugin.sh, without
+  # going through restore_cache/save_cache at all (a same-plugin-dir second
+  # invocation is functionally identical to a cache restore landing the first run's
+  # clone back on disk before this one runs - which is exactly what fetch-plugin.yml
+  # does): an unpinned reference re-clones fresh and picks up a moved tip every time,
+  # while a pinned reference correctly keeps reusing its cached/existing clone.
+  test_fetch_plugin_unpinned_ref_never_cached_stale_regression:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Build two throwaway git fixture repos (one for each branch of the test)
+          command: |
+            set -euo pipefail
+            export GIT_AUTHOR_NAME="orb test" GIT_AUTHOR_EMAIL="test@example.com"
+            export GIT_COMMITTER_NAME="orb test" GIT_COMMITTER_EMAIL="test@example.com"
+            for name in unpinned-cache-repo pinned-cache-repo; do
+              rm -rf "/tmp/${name}"
+              mkdir -p "/tmp/${name}"
+              echo "commit-one" > "/tmp/${name}/marker.txt"
+              git -C "/tmp/${name}" init -q -b main
+              git -C "/tmp/${name}" add -A
+              git -C "/tmp/${name}" commit -q -m "commit one"
+            done
+            git -C /tmp/pinned-cache-repo tag v1
+      - run:
+          name: "Unpinned branch, run 1: first fetch clones the tip (commit one)"
+          command: |
+            set -euo pipefail
+            rm -rf /tmp/unpinned-plugin-dir
+            ORB_VAL_PLUGIN='file:///tmp/unpinned-cache-repo' \
+              ORB_VAL_PLUGIN_DIR=/tmp/unpinned-plugin-dir \
+              ORB_VAL_ALWAYS_CLONE_FRESH=false \
+              BASH_ENV="$(mktemp)" \
+              bash src/scripts/fetch-plugin.sh
+            test "$(cat /tmp/unpinned-plugin-dir/_repo/marker.txt)" = "commit-one"
+      - run:
+          name: Advance the unpinned repo's tip to a second commit
+          command: |
+            set -euo pipefail
+            export GIT_AUTHOR_NAME="orb test" GIT_AUTHOR_EMAIL="test@example.com"
+            export GIT_COMMITTER_NAME="orb test" GIT_COMMITTER_EMAIL="test@example.com"
+            echo "commit-two" > /tmp/unpinned-cache-repo/marker.txt
+            git -C /tmp/unpinned-cache-repo commit -q -am "commit two"
+      - run:
+          name: "Unpinned branch, run 2: NOT served from the existing/cached clone - re-clones and picks up the moved tip"
+          command: |
+            set -euo pipefail
+            output="$(ORB_VAL_PLUGIN='file:///tmp/unpinned-cache-repo' \
+              ORB_VAL_PLUGIN_DIR=/tmp/unpinned-plugin-dir \
+              ORB_VAL_ALWAYS_CLONE_FRESH=false \
+              BASH_ENV="$(mktemp)" \
+              bash src/scripts/fetch-plugin.sh 2>&1)"
+            echo "${output}"
+            test "$(cat /tmp/unpinned-plugin-dir/_repo/marker.txt)" = "commit-two"
+            case "${output}" in
+              *"Discarding the cached/existing clone"*"no #ref is pinned"*) ;;
+              *)
+                echo "FAIL: expected the loud 'discarding the cached/existing clone' log line, got:" >&2
+                echo "${output}" >&2
+                exit 1
+                ;;
+            esac
+            case "${output}" in
+              *"NEVER served from that cache"*"pinned forever to whatever commit happened to be at the tip on the FIRST run"*) ;;
+              *)
+                echo "FAIL: expected the strengthened unpinned-ref WARNING text, got:" >&2
+                echo "${output}" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: an unpinned reference was never served from the existing/cached clone - it re-cloned and picked up the moved tip, with the consequence stated loudly in the job log."
+      - run:
+          name: "Pinned tag, run 1: first fetch clones commit one, at v1"
+          command: |
+            set -euo pipefail
+            rm -rf /tmp/pinned-plugin-dir
+            ORB_VAL_PLUGIN='file:///tmp/pinned-cache-repo#v1' \
+              ORB_VAL_PLUGIN_DIR=/tmp/pinned-plugin-dir \
+              ORB_VAL_ALWAYS_CLONE_FRESH=false \
+              BASH_ENV="$(mktemp)" \
+              bash src/scripts/fetch-plugin.sh
+            test "$(cat /tmp/pinned-plugin-dir/_repo/marker.txt)" = "commit-one"
+      - run:
+          name: Advance the pinned repo's tip WITHOUT moving the v1 tag
+          command: |
+            set -euo pipefail
+            export GIT_AUTHOR_NAME="orb test" GIT_AUTHOR_EMAIL="test@example.com"
+            export GIT_COMMITTER_NAME="orb test" GIT_COMMITTER_EMAIL="test@example.com"
+            echo "commit-two" > /tmp/pinned-cache-repo/marker.txt
+            git -C /tmp/pinned-cache-repo commit -q -am "commit two"
+      - run:
+          name: "Pinned tag, run 2: correctly reuses the existing/cached clone - the fix doesn't break the intended caching behavior"
+          command: |
+            set -euo pipefail
+            output="$(ORB_VAL_PLUGIN='file:///tmp/pinned-cache-repo#v1' \
+              ORB_VAL_PLUGIN_DIR=/tmp/pinned-plugin-dir \
+              ORB_VAL_ALWAYS_CLONE_FRESH=false \
+              BASH_ENV="$(mktemp)" \
+              bash src/scripts/fetch-plugin.sh 2>&1)"
+            echo "${output}"
+            test "$(cat /tmp/pinned-plugin-dir/_repo/marker.txt)" = "commit-one"
+            case "${output}" in
+              *"Using cached/existing clone"*) ;;
+              *)
+                echo "FAIL: expected a pinned reference to reuse the existing/cached clone, got:" >&2
+                echo "${output}" >&2
+                exit 1
+                ;;
+            esac
+            case "${output}" in
+              *"WARNING: no #ref pinned"*)
+                echo "FAIL: the unpinned-ref warning must not fire for a pinned reference" >&2
+                exit 1
+                ;;
+            esac
+            echo "OK: a pinned reference still correctly reuses its cached/existing clone, unaffected by the unpinned repo's own moved tip."
+
   # Gap-closing test, per the release-readiness audit: map-env.sh's CIRCLE_* ->
   # BUILDKITE_* mapping was only ever exercised INDIRECTLY inside buildkite/plugin
   # calls -- no test ever asserted the mapping itself is correct, unlike the sibling
@@ -717,6 +844,8 @@ workflows:
           filters: *filters
       - test_fetch_plugin_idempotency:
           filters: *filters
+      - test_fetch_plugin_unpinned_ref_never_cached_stale_regression:
+          filters: *filters
       - test_fetch_plugin_credential_leak_regression:
           filters: *filters
       - test_configure_secret_value_not_echoed_regression:
@@ -740,6 +869,7 @@ workflows:
             - test_fetch_plugin_ref_injection_regression
             - test_fetch_plugin_subdir_traversal_regression
             - test_fetch_plugin_idempotency
+            - test_fetch_plugin_unpinned_ref_never_cached_stale_regression
             - test_fetch_plugin_credential_leak_regression
             - test_configure_secret_value_not_echoed_regression
             - test_plugin_test_results_path

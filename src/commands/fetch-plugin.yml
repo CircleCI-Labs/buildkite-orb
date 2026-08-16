@@ -26,7 +26,12 @@ parameters:
   plugin-cache:
     type: boolean
     default: true
-    description: Cache the cloned plugin repository using CircleCI caching, keyed on the plugin reference string.
+    description: >
+      Cache the cloned plugin repository using CircleCI caching, keyed on the plugin
+      reference string. Only ever reused when the reference is pinned to a tag or
+      commit SHA (#ref) - an unpinned reference (a mutable branch, or no #ref at all)
+      always re-clones fresh, on every run, since a stable key computed from it would
+      otherwise cache the clone once and reuse it forever.
   always-clone-fresh:
     type: boolean
     default: false

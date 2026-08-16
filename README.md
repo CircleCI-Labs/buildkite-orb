@@ -57,7 +57,10 @@ executor overrides.
 1. **`fetch-plugin`** resolves your plugin reference the same way Buildkite does -
    `name#ref` (the `buildkite-plugins` GitHub org), `org/name#ref`, or a full
    `https://`/`ssh://`/`file://` git URL, optionally with an in-repo subdirectory - and
-   git-clones it at the pinned ref, cached. It also warns (non-fatally) if the cloned
+   git-clones it at the pinned ref, cached. **Caching only ever applies to a pinned
+   ref** (`#tag` or `#sha`) - an unpinned reference (a mutable branch, or no `#ref` at
+   all) always re-clones fresh, on every run, regardless of `plugin-cache`; see
+   [Limits](#limits) for why. It also warns (non-fatally) if the cloned
    plugin.yml's `requirements:` list names a command missing from `$PATH` - real
    Buildkite agents never install these either, so a missing one is a host-setup gap
    either way; better to see that up front than as a mysterious failure inside a hook.
@@ -451,6 +454,18 @@ at all against this orb as written:
 - **Multi-line YAML scalars, flow-style config, anchors/aliases, same-line trailing
   `#` comments** - see [Config flattening](#config-flattening).
 - **The `docker`/`docker-compose` plugins** - deliberately not a target; see above.
+- **The plugin-clone cache never reuses an unpinned reference.** `plugin-cache`'s key
+  is the plugin reference string itself, with no fallback key - a good match for how
+  Buildkite itself treats plugin sources, but only if the reference is pinned (`#tag`
+  or `#sha`). An unpinned reference (a mutable branch, or no `#ref` at all) would
+  otherwise cache the clone **once** and then reuse it forever, since the key never
+  changes on its own - permanently pinning you to whatever commit happened to be at
+  the branch tip on the very first run, which is worse than not caching at all (an
+  uncached run at least re-fetches the branch tip every time). `fetch-plugin.sh`
+  closes that gap by refusing to reuse a cached/restored clone whenever no ref is
+  pinned, loudly, in the job log - so an unpinned reference always re-clones fresh,
+  exactly as if `plugin-cache: false`. Pin a tag or commit SHA to get both a
+  reproducible build and a working cache.
 - **No automatic `store_test_results` default -- but an explicit opt-in exists.** Real
   Buildkite Test Engine/Analytics is an HTTP API upload
   (`analytics-api.buildkite.com/v1/uploads`, OIDC- or token-authed), performed by a plugin (the
@@ -601,7 +616,7 @@ steps interleaved between individual stages -- e.g. inspecting the flattened
 | `meta-data-dir` | string | `/tmp/buildkite-meta-data` | Directory backing `buildkite-agent meta-data get/set`, this-job-only scope. |
 | `store-artifacts` *(job only)* | boolean | `true` | Auto-`store_artifacts` whatever hooks uploaded via the shim, from `artifact-dir`. |
 | `plugin-dir` | string | `/tmp/buildkite-plugin` | Directory the plugin's repo is cloned into. |
-| `plugin-cache` | boolean | `true` | Cache the cloned plugin repo, keyed on the plugin reference string. |
+| `plugin-cache` | boolean | `true` | Cache the cloned plugin repo, keyed on the plugin reference string. Only ever reused for a pinned (`#tag`/`#sha`) reference - an unpinned reference always re-clones fresh; see [Limits](#limits). |
 | `always-clone-fresh` | boolean | `false` | Force a fresh clone even if a cache/prior clone exists (mirrors Buildkite's `BUILDKITE_PLUGINS_ALWAYS_CLONE_FRESH`). |
 | `working-directory` | string | `.` | Directory hooks start running from (Buildkite's `BUILDKITE_BUILD_CHECKOUT_PATH` equivalent). |
 | `cache-key-prefix` | string | `v1` | Prefix applied to every cache key this orb writes. |
