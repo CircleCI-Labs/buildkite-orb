@@ -10,7 +10,7 @@ Run **one [Buildkite plugin](https://buildkite.com/docs/pipelines/integrations/p
 CircleCI Labs, including this repo, is a collection of solutions developed by members of CircleCI's field engineering teams through our engagement with various customer needs.
 
 -   ✅ Created by engineers @ CircleCI
--   ⚠️ **Not yet used by production CircleCI customers.** This orb is currently dev-published only. What *is* verified: `equinixmetal-buildkite/trivy` (a real vulnerability scanner, fully credential-free) runs green end-to-end in this repo's own CI: fetch, configure, run hooks, cross-hook env threading, into a real scan. See [Verified targets](docs/LIMITS.md#verified-targets-and-what-verified-means-for-each) for exactly what is and isn't proven among this orb's three named targets.
+-   ⚠️ **Not yet used by production CircleCI customers.** This orb is newly published, with no production track record yet. What *is* verified: `equinixmetal-buildkite/trivy` (a real vulnerability scanner, fully credential-free) runs green end-to-end in this repo's own CI: fetch, configure, run hooks, cross-hook env threading, into a real scan. See [Verified targets](docs/LIMITS.md#verified-targets-and-what-verified-means-for-each) for exactly what is and isn't proven among this orb's three named targets.
 -   ❌ **not** officially supported by CircleCI support
 
 ---
