@@ -49,7 +49,7 @@ flattening") is what every real config in the vault-secrets, aws-assume-role-wit
 and trivy plugins' own READMEs actually needs, and building JSON-Schema validation with no target
 plugin to verify it against would be unverified surface area for a feature nothing here exercises.
 
-**What shipped instead:** the gap is named explicitly under ["Limits"](#limits) rather than left
+**What shipped instead:** the gap is named explicitly under ["Limits"](LIMITS.md#limits) rather than left
 to be discovered by a hook that silently gets nothing.
 
 **If someone picks this up:** a plugin that specifically needs `BUILDKITE_PLUGIN_CONFIGURATION`
