@@ -54,7 +54,8 @@ to be discovered by a hook that silently gets nothing.
 
 **If someone picks this up:** a plugin that specifically needs `BUILDKITE_PLUGIN_CONFIGURATION`
 would be the right forcing function -- build against a real target, the same discipline every
-other piece of this orb was held to (see "Verified targets" in the README).
+other piece of this orb was held to (see
+["Verified targets"](LIMITS.md#verified-targets-and-what-verified-means-for-each) in LIMITS.md).
 
 ### 3. Formalizing multi-plugin chaining into a shared command
 
@@ -103,8 +104,9 @@ script. `fetch-plugin` sets `BUILDKITE_PLUGIN_ROOT`/`BUILDKITE_PLUGIN_ENV_PREFIX
 reads the latter, `run-hooks` reads the former -- that's what lets calling the sequence more than
 once (each with its own `plugin-dir`) already approximate multi-plugin chaining today, and what
 would let a future shared orb formalize that into its own command without a breaking change here
-(see item 3 above). See the README's "How it works" and "Layering and future multi-plugin
-chaining" sections for the current mechanism.
+(see item 3 above). See "How it works" in [ARCHITECTURE.md](ARCHITECTURE.md) and
+["Layering and future multi-plugin chaining"](COMMANDS.md#layering-and-future-multi-plugin-chaining)
+for the current mechanism.
 
 ### Workspace / parallelism fit
 
@@ -116,8 +118,9 @@ a downstream job is already fully solved with zero orb changes: write it to a fi
 run, `persist_to_workspace` it, `attach_workspace` downstream. **Branching which jobs *run*, based
 on an upstream job's output, was considered and explicitly not solved here** -- CircleCI has no
 native construct for a genuine workflow-level conditional at all, orb or no orb; the closest real
-mechanism is a setup workflow plus the `circleci/continuation` orb. See the README's "Passing data
-across jobs" section for the current worked examples of both mechanisms.
+mechanism is a setup workflow plus the `circleci/continuation` orb. See
+["Passing data across jobs"](GETTING-STARTED.md#passing-data-across-jobs) in GETTING-STARTED.md
+for the current worked examples of both mechanisms.
 
 ### Vendor-image layering
 
@@ -133,5 +136,5 @@ flags. One real trap found while researching this and worth repeating here: Buil
 (`buildkite.com/docs/agent/buildkite-hosted/linux/custom-agent-images`) point at
 `buildkite/hosted-agent-base`, a different, stale image (unmaintained for over a year as of this
 writing) -- the actively-maintained successor this orb actually uses is `buildkite/agent-base`
-from a different GitHub repo. See the README's "Choosing an executor" section for the current
-user-facing guidance and the exact tag/tool tradeoffs.
+from a different GitHub repo. See ["Choosing an executor"](GETTING-STARTED.md#choosing-an-executor)
+for the current user-facing guidance and the exact tag/tool tradeoffs.
